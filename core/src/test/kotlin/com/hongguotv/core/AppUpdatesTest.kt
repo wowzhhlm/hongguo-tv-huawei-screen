@@ -1,0 +1,160 @@
+package com.hongguotv.core
+
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.security.MessageDigest
+
+class AppUpdatesTest {
+    private val bytes = "signed-apk-test-bytes".toByteArray()
+    private fun json() = JSONObject().put("schema", 1).put("packageName", "com.hongguotv.nativeapp")
+        .put("versionCode", 10001).put("versionName", "0.9.0+1").put("minSdk", 26).put("tag", "kotlin-v0.9.0-build.1")
+        .put("apk", JSONObject().put("name", "hongguotv-kotlin-0.9.0-build.1-android8.apk").put("size", bytes.size)
+            .put("sha256", MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }))
+    private fun update() = AppUpdate.parse(json().toString())
+    private fun withFile(block: (File) -> Unit) {
+        val dir = Files.createTempDirectory("update-test").toFile()
+        try { block(File(dir, "update.apk")) } finally { dir.deleteRecursively() }
+    }
+    private fun repository(reply: (String) -> ByteArray): AppUpdateRepository = AppUpdateRepository(
+        OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(reply(chain.request().url.toString()).toResponseBody()).build()
+        }.build()
+    )
+    @Test fun audioPackageIsSelectedByAndroidVersion() {
+        val metadata = json().put("minSdk", 21)
+        metadata.getJSONObject("apk").put("name", "hongguotv-kotlin-0.16.2-android5.apk")
+        metadata.put("platformApk", JSONObject(metadata.getJSONObject("apk").toString())
+            .put("name", "hongguotv-kotlin-0.16.2-android6.apk"))
+        for (sdk in listOf(21, 22)) {
+            val result = AppUpdate.parse(metadata.toString(), sdk)
+            assertTrue(result.fileName.endsWith("android5.apk"))
+            assertEquals(21, result.minSdk)
+        }
+        for (sdk in listOf(23, 30, 36)) {
+            val result = AppUpdate.parse(metadata.toString(), sdk)
+            assertTrue(result.fileName.endsWith("android6.apk"))
+            assertEquals(23, result.minSdk)
+        }
+        metadata.remove("platformApk")
+        assertTrue(AppUpdate.parse(metadata.toString(), 30).fileName.endsWith("android5.apk"))
+    }
+
+    @Test fun invalidPlatformPackageIsRejected() {
+        for (changes in listOf("name" to "../evil.apk", "name" to "hongguotv-kotlin-0.16.2-android5.apk",
+            "sha256" to "bad", "size" to 0)) {
+            val data = json().put("platformApk", JSONObject(json().getJSONObject("apk").toString())
+                .put("name", "hongguotv-kotlin-0.16.2-android6.apk").put(changes.first, changes.second))
+            assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(data.toString(), 30) }
+        }
+    }
+
+    @Test fun metadataUsesAcceleratorFirst() {
+        val urls = mutableListOf<String>()
+        repository { url -> urls += url; json().toString().toByteArray() }.use {
+            assertEquals(update(), it.latest())
+        }
+        assertEquals(listOf(UpdateDownloadSources.MIRROR + AppUpdate.RELEASES + "/latest/download/update.json"), urls)
+    }
+    @Test fun malformedMirrorMetadataFallsBackToOrigin() {
+        val urls = mutableListOf<String>()
+        repository { url -> urls += url; if (urls.size == 1) "<html>error</html>".toByteArray() else json().toString().toByteArray() }.use {
+            assertEquals(update(), it.latest())
+        }
+        assertEquals(UpdateDownloadSources.urls(AppUpdate.RELEASES + "/latest/download/update.json"), urls)
+    }
+    @Test fun corruptMirrorApkFallsBackAndVerifiesOrigin() = withFile { file ->
+        val urls = mutableListOf<String>()
+        repository { url -> urls += url; if (urls.size == 1) ByteArray(bytes.size) else bytes }.use {
+            it.download(update(), file) {}
+        }
+        assertEquals(UpdateDownloadSources.urls(update().downloadUrl), urls)
+        assertTrue(UpdateFiles.verify(file, update()))
+    }
+    @Test fun failedMirrorRequestFallsBack() {
+        var requests = 0
+        repository { if (++requests == 1) throw IOException("timeout") else json().toString().toByteArray() }.use {
+            assertEquals(update(), it.latest())
+        }
+        assertEquals(2, requests)
+    }
+    @Test fun cancellationDoesNotStartFallback() {
+        var requests = 0
+        lateinit var source: AppUpdateRepository
+        source = repository { requests++; source.cancel(); throw IOException("cancelled") }
+        source.use { assertThrows(IOException::class.java) { it.latest() } }
+        assertEquals(1, requests)
+    }
+    @Test fun onlyHigherCompatibleVersionsAreUpdates() {
+        val update = update()
+        assertTrue(update.newerThan(9, 26)); assertFalse(update.newerThan(10001, 36)); assertFalse(update.newerThan(10002, 36)); assertFalse(update.newerThan(9, 25))
+    }
+    @Test fun legacyAndroidReceivesOnlyCompatibleUpdates() {
+        val o = json().put("minSdk", 21)
+        o.getJSONObject("apk").put("name", "hongguotv-kotlin-0.10.0-android5.apk")
+        val update = AppUpdate.parse(o.toString())
+        for (sdk in listOf(21, 22, 23, 24, 25, 26, 36)) assertTrue(update.newerThan(9, sdk))
+        assertFalse(update.newerThan(9, 20))
+        assertFalse(update.newerThan(10001, 21))
+        for (sdk in listOf(19, 20)) assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.put("minSdk", sdk).toString()) }
+    }
+    @Test fun downloadUrlUsesOnlyFixedRepositoryAndValidatedNames() {
+        assertEquals("https://github.com/N3urda/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().downloadUrl)
+        for (value in listOf("../../bad.apk", "evil.apk", "https://example.com/evil.apk", "hongguotv-kotlin-1/2-android8.apk")) {
+            val o = json(); o.getJSONObject("apk").put("name", value)
+            assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
+        }
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("tag", "../../other").toString()) }
+    }
+    @Test fun rejectOtherPackageAndInvalidSchema() {
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("packageName", "other.app").toString()) }
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("schema", 2).toString()) }
+    }
+    @Test fun enforceVersionSizeAndChecksumBounds() {
+        for (code in listOf(0L, -1L, Int.MAX_VALUE.toLong()+1)) assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("versionCode", code).toString()) }
+        for (size in listOf(0L, -1L, AppUpdate.MAX_APK_BYTES+1)) {
+            val o = json(); o.getJSONObject("apk").put("size", size)
+            assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
+        }
+        val o = json(); o.getJSONObject("apk").put("sha256", "invalid")
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
+    }
+    @Test fun verifiedDownloadAtomicallyReplacesOldFile() = withFile { file ->
+        file.writeText("previous"); val progress = mutableListOf<Int>()
+        UpdateFiles.receive(ByteArrayInputStream(bytes), file, update(), progress::add)
+        assertTrue(UpdateFiles.verify(file, update())); assertEquals(100, progress.last()); assertFalse(File(file.path+".part").exists())
+    }
+    @Test fun truncatedDownloadPreservesPreviousFile() = withFile { file ->
+        file.writeText("previous")
+        assertThrows(IOException::class.java) { UpdateFiles.receive(ByteArrayInputStream(bytes.copyOf(4)), file, update()) }
+        assertEquals("previous", file.readText()); assertFalse(File(file.path+".part").exists())
+    }
+    @Test fun oversizedDownloadIsRejectedAndRemoved() = withFile { file ->
+        assertThrows(IOException::class.java) { UpdateFiles.receive(ByteArrayInputStream(bytes+byteArrayOf(1)), file, update()) }
+        assertFalse(file.exists()); assertFalse(File(file.path+".part").exists())
+    }
+    @Test fun checksumMismatchCannotBecomeInstallableFile() = withFile { file ->
+        val corrupt = bytes.copyOf(); corrupt[0] = 0
+        assertThrows(IOException::class.java) { UpdateFiles.receive(ByteArrayInputStream(corrupt), file, update()) }
+        assertFalse(file.exists()); assertFalse(File(file.path+".part").exists())
+    }
+    @Test fun interruptedDownloadCleansUpPartialFile() = withFile { file ->
+        Thread.currentThread().interrupt()
+        try { assertThrows(IOException::class.java) { UpdateFiles.receive(ByteArrayInputStream(bytes), file, update()) } }
+        finally { Thread.interrupted() }
+        assertFalse(file.exists()); assertFalse(File(file.path+".part").exists())
+    }
+    @Test fun cacheMustStillMatchExpectedContent() = withFile { file ->
+        file.writeBytes(bytes); assertTrue(UpdateFiles.verify(file, update()))
+        file.writeBytes(ByteArray(bytes.size)); assertFalse(UpdateFiles.verify(file, update()))
+    }
+}

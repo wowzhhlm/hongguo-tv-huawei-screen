@@ -1,0 +1,19 @@
+# 本地 SDK 路径
+local.properties
+
+# 签名材料（严禁提交）
+keystore.properties
+*.jks
+*.keystore
+signing/
+
+# 构建产物
+**/build/
+outputs/
+
+# IDE
+.idea/
+*.iml
+.gradle/
+
+# 上游发布用的开发文档（与构建无关，定制版保留作参考）
