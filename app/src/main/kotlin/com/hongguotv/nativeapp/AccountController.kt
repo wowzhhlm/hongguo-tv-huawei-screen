@@ -945,7 +945,7 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                         addView(image)
                         addView(
                             android.widget.TextView(activity).apply {
-                                text = "用手机红果 App：我的 → 右上角菜单 → 扫一扫\n扫码后请在手机确认登录"
+                                text = "用手机红果 App：我的 → 右上角菜单 → 扫一扫\n扫码后请在手机确认登录\n\n鸿蒙 6 若提示“暂不支持该二维码”，请点下方“手机号登录”"
                                 textSize = 18f
                                 gravity = android.view.Gravity.CENTER
                                 setPadding(0, 12, 0, 0)
@@ -1035,8 +1035,9 @@ class AccountController(private val activity: Activity, private val play: (Cloud
                                     showDialog(
                                         AlertDialog.Builder(activity)
                                             .setTitle("扫码登录未完成")
-                                            .setMessage(status)
+                                            .setMessage("$status\n\n若手机提示“暂不支持该二维码”，请改用手机号验证码登录。")
                                             .setPositiveButton("重新扫码") { _, _ -> qrLogin() }
+                                            .setNeutralButton("手机号登录") { _, _ -> phone() }
                                             .setNegativeButton("返回账号页") { _, _ -> show() }
                                     )
                                 }

@@ -560,7 +560,7 @@ class TvSocial(
             lineHeightPx = maxOf(textHeightPx, (textSizePx * lineHeightTenths + 9) / 10)
             region = DanmakuArea.fromPreference(prefs.getString("area", null)).region(
                 viewHeightPx = height,
-                topInsetPx = minOf(dp(65), height / 8),
+                topInsetPx = minOf(dp(8), height / 8),
                 bottomInsetPx = minOf(dp(44), height / 8),
                 textHeightPx = textHeightPx,
             )

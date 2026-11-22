@@ -76,7 +76,7 @@ class AccountRecommendationStartupTest {
             assertNotNull(independentResume)
             assertSame("Independent resume section must scroll with the shelves", scrollParent(hotCard), scrollParent(independentResume))
             assertTrue(independentResume.hasFocus())
-            assertTrue(texts(decor).contains("随心看"))
+            assertTrue(texts(decor).contains("首页"))
             assertFalse(texts(decor).any { it.contains("今晚") || it == "随心看  ›" })
             assertTrue(texts(decor).contains("我的"))
         } finally { controller.destroy() }

@@ -85,8 +85,8 @@ class LeftRailNavigationTest {
             assertTrue(card.hasFocus())
             shell.navigation[0].requestFocus()
             key(KeyEvent.KEYCODE_DPAD_DOWN)
-            assertTrue(shell.navigation[8].hasFocus())
-            assertEquals("随心看", shell.navigation[8].text.toString())
+            assertTrue(shell.navigation[4].hasFocus())
+            assertEquals("观看历史", shell.navigation[4].text.toString())
         } finally { controller.pause().stop().destroy() }
     }
 

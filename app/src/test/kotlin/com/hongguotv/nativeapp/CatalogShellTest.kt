@@ -87,6 +87,8 @@ class CatalogShellTest {
             shell.body.addView(TextView(activity.get()).apply { text = "首页内容" })
             val top = shell.getChildAt(0)
             assertNotSame("Discovery and search remain independent destinations", shell.navigation[1], shell.navigation[7])
+            assertEquals("首页", shell.navigation[0].text.toString())
+            assertEquals("观看历史", shell.navigation[4].text.toString())
             assertEquals("找剧", shell.navigation[1].text.toString())
             assertEquals("搜索", shell.navigation[7].text.toString())
             val tab = shell.navigation[2]

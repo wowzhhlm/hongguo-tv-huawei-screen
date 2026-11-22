@@ -406,7 +406,7 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private var generation = 0
     private var screen = "catalog"
-    private var tab = 0
+    private var tab = 8 // 首页即随心看：沉浸式推荐流是默认首页
     private var startupApplied = false
     private var settingsAccountStatus: TextView? = null
     private var settingsGroup = 0
@@ -687,7 +687,7 @@ class MainActivity : Activity() {
             }
         }
         updater =
-            AppUpdater(this, com.hongguotv.core.DisabledAppUpdateSource()) {
+            AppUpdater(this, GitHubUpdateSource()) {
                 foreground &&
                     library.isLoaded &&
                     screen == "catalog" &&
@@ -1535,7 +1535,7 @@ class MainActivity : Activity() {
             preview.visibility = View.GONE
             message(list, if (loading) "正在加载推荐…" else empty)
             if (!loading && (isHistory() || isFavorites())) {
-                addButton(list, "去首页看看") { switchTab(0) }
+                addButton(list, "去首页看看") { switchTab(8) }
             }
             if ((tab <= 2 || localCatalog()) && page > 1)
                 addButton(list, "上一页") {

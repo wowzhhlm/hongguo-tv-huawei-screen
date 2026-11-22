@@ -16,12 +16,20 @@ internal interface HandlesHorizontalKeys
 internal class CatalogShell(context: Context, private val phone: (View) -> Unit = {}, private val navigate: (Int) -> Unit) : LinearLayout(context) {
     val body = LinearLayout(context).apply { orientation = VERTICAL }
     private val rail = LinearLayout(context).apply { orientation = VERTICAL }
-    private val destinations = listOf(0 to "首页", 8 to "随心看", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的", 9 to "扫码", 6 to "设置")
+    // 首页即随心看：tab 8 是沉浸式播放流，显示为“首页”；观看历史提升为一级入口。
+    private val destinations = listOf(8 to "首页", 4 to "观看历史", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的", 9 to "扫码", 6 to "设置")
     private val buttons = mutableListOf<TextView>()
     private var remembered: View? = null
-    private var selectedDestination = 0
+    private var selectedDestination = 8
     val navigation: List<TextView>
-        get() = (0..8).map { index -> buttons[destinations.indexOfFirst { it.first == if (index in 3..5) 3 else index }] }
+        get() = (0..8).map { index ->
+            val destination = when (index) {
+                3, 5 -> 3 // 收藏/预约仍归属“我的”
+                0, 8 -> 8 // 首页即随心看
+                else -> index
+            }
+            buttons[destinations.indexOfFirst { it.first == destination }]
+        }
 
     val hasNavigationFocus: Boolean get() = rail.hasFocus()
 
@@ -82,7 +90,11 @@ internal class CatalogShell(context: Context, private val phone: (View) -> Unit 
     }
 
     fun select(index: Int) {
-        selectedDestination = if (index in 3..5) 3 else index
+        selectedDestination = when (index) {
+            3, 5 -> 3
+            0 -> 8
+            else -> index
+        }
         buttons.forEachIndexed { i, button ->
             button.isSelected = destinations[i].first == selectedDestination
             paintNavigation(button)

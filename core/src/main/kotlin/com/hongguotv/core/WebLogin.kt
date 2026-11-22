@@ -98,8 +98,29 @@ class WebLogin(http: OkHttpClient) {
         return data
     }
 
+    /**
+     * 桌面版在申请二维码时会附带一份 WebView 指纹（hardwareConcurrency / plugins /
+     * innerWidth / innerHeight / outerWidth / outerHeight）。部分鸿蒙客户端只接受带
+     * 指纹的扫码会话，这里按电视屏幕与 CPU 构造等价参数，尽量对齐桌面版行为。
+     */
+    internal fun qrFingerprint(): String =
+        JSONObject()
+            .put("hardwareConcurrency", Runtime.getRuntime().availableProcessors())
+            .put("plugins", 0)
+            .put("innerWidth", 1920)
+            .put("innerHeight", 1080)
+            .put("outerWidth", 1920)
+            .put("outerHeight", 1080)
+            .toString()
+
     fun qr(): Qr {
-        val data = checked(call("/passport/web/get_qrcode/", params = mapOf("next" to "$BASE/")))
+        val data =
+            checked(
+                call(
+                    "/passport/web/get_qrcode/",
+                    params = mapOf("next" to "$BASE/", "fp" to qrFingerprint()),
+                )
+            )
         token = data.getString("token")
         val encoded = data.getString("qrcode").substringAfter("base64,")
         val expiry = data.optLong("expire_time", 180)
