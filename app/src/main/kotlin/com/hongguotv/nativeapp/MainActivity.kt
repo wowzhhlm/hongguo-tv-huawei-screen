@@ -455,6 +455,8 @@ class MainActivity : Activity() {
     private var panel = false
     // Consume the entire shortcut press, even when ACTION_DOWN opens a focusable panel.
     private val playerShortcutKeys = mutableSetOf<Int>()
+    // 首页"选集"入口：下一次打开详情时把焦点落到选集区（不改变 openDetail 签名，兼容反射测试）。
+    private var focusEpisodesOnDetail = false
     private var pendingEpisodeTarget: Int? = null
     private var pendingEpisodeSwitch: Runnable? = null
     private var automaticEpisodeFrom = -1
@@ -1156,7 +1158,10 @@ class MainActivity : Activity() {
                     initialQuality = library.maxQuality,
                     onSpeedChange = { speed -> library.playbackSpeed = speed },
                     onQualityChange = { quality -> library.maxQuality = quality },
-                    openEpisodes = { series -> openDetail(series, resume = true, fromHome = true, focusEpisodes = true) },
+                    openEpisodes = { series ->
+                        focusEpisodesOnDetail = true
+                        openDetail(series, resume = true, fromHome = true)
+                    },
                 )
             homeFeed = feed
             container.addView(feed, lp(-1, 0).apply { weight = 1f })
@@ -2573,7 +2578,6 @@ class MainActivity : Activity() {
         fromRelated: Boolean = false,
         fromHome: Boolean = false,
         fromPhone: Boolean = false,
-        focusEpisodes: Boolean = false,
     ) {
         val trial = if (fromHome && resume) homeFeed?.currentPlayback(series.id) else null
         val trialEpisodeId = trial?.episodeId
@@ -2625,8 +2629,9 @@ class MainActivity : Activity() {
                     )
                 episodeIndex = target.index
                 group = episodeIndex / 20
-                if (!resume || focusEpisodes) {
-                    showDetail(focusEpisodes || !resume)
+                if (!resume || focusEpisodesOnDetail) {
+                    showDetail(focusEpisodesOnDetail || !resume)
+                    focusEpisodesOnDetail = false
                     return@work
                 }
                 val episodeId = result.episodes.getOrNull(target.index)
