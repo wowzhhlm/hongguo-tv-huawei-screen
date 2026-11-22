@@ -1152,6 +1152,11 @@ class MainActivity : Activity() {
                             progress.episodeIndex, progress.position, progress.duration, progress.updatedAt),
                             count, force || progress.completed || !foreground)
                     },
+                    initialSpeed = library.playbackSpeed,
+                    initialQuality = library.maxQuality,
+                    onSpeedChange = { speed -> library.playbackSpeed = speed },
+                    onQualityChange = { quality -> library.maxQuality = quality },
+                    openEpisodes = { series -> openDetail(series, resume = true, fromHome = true, focusEpisodes = true) },
                 )
             homeFeed = feed
             container.addView(feed, lp(-1, 0).apply { weight = 1f })
@@ -2568,6 +2573,7 @@ class MainActivity : Activity() {
         fromRelated: Boolean = false,
         fromHome: Boolean = false,
         fromPhone: Boolean = false,
+        focusEpisodes: Boolean = false,
     ) {
         val trial = if (fromHome && resume) homeFeed?.currentPlayback(series.id) else null
         val trialEpisodeId = trial?.episodeId
@@ -2619,8 +2625,8 @@ class MainActivity : Activity() {
                     )
                 episodeIndex = target.index
                 group = episodeIndex / 20
-                if (!resume) {
-                    showDetail(false)
+                if (!resume || focusEpisodes) {
+                    showDetail(focusEpisodes || !resume)
                     return@work
                 }
                 val episodeId = result.episodes.getOrNull(target.index)

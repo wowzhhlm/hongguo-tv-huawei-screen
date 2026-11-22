@@ -1303,4 +1303,101 @@ class HomeFeedScreenTest {
             controller.pause().stop().destroy()
         }
     }
+
+    @Test fun menuKeyTogglesPlaybackControlsAndDoesNotChangeDrama() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player)
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            val stage = get(screen, "stage") as View
+            val controls = get(screen, "controls") as ViewGroup
+            assertEquals(View.GONE, controls.visibility)
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU))
+            assertEquals(View.VISIBLE, controls.visibility)
+            assertTrue("焦点落在倍速按钮", (get(screen, "speedButton") as View).hasFocus())
+            assertEquals("1", state.current?.id)
+            assertTrue(texts(screen).any { it.text.startsWith("倍速") })
+            assertTrue(texts(screen).any { it.text.startsWith("清晰度") })
+            assertTrue(texts(screen).any { it.text.startsWith("选集") })
+            // 遥控器把菜单键送到当前焦点（控制条按钮），按钮负责收起控制条。
+            val menu = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU)
+            (get(screen, "speedButton") as View).dispatchKeyEvent(menu)
+            assertEquals(View.GONE, controls.visibility)
+            assertTrue(stage.hasFocus())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test fun playbackControlsCycleSpeedAndPersistPreference() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val speeds = mutableListOf<Float>()
+        val qualities = mutableListOf<Int>()
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player,
+            initialSpeed = 1f, initialQuality = 1080,
+            onSpeedChange = { speeds += it }, onQualityChange = { qualities += it })
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            val stage = get(screen, "stage") as View
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU))
+            val speed = get(screen, "speedButton") as TextView
+            assertTrue(speed.text.contains(PlaybackSpeed.label(1f)))
+            speed.performClick()
+            assertTrue(speeds.isNotEmpty())
+            assertEquals(PlaybackSpeed.options[2], speeds.last())
+            assertTrue((get(screen, "speedButton") as TextView).text.contains("1.25"))
+            val quality = get(screen, "qualityButton") as TextView
+            assertTrue(quality.text.contains("1080"))
+            quality.performClick()
+            assertTrue(qualities.isNotEmpty())
+            assertEquals(PlaybackQuality.options.first(), qualities.last())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test fun playbackControlsTimeLabelReflectsPositionAndDuration() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false).apply { totalDuration = 114_000 }
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player)
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            player.saved = 5_000
+            val stage = get(screen, "stage") as View
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU))
+            val time = get(screen, "timeLabel") as TextView
+            assertEquals("00:05 / 01:54", time.text.toString())
+            val progress = get(screen, "progressView") as android.widget.ProgressBar
+            assertEquals(43, progress.progress)
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test fun episodeButtonOpensEpisodePickerAndPausesPlayback() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        var pickedId = ""
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player,
+            openEpisodes = { pickedId = it.id })
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            player.status?.invoke(TrialStatus.READY)
+            val stage = get(screen, "stage") as View
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MENU))
+            (get(screen, "episodeButton") as TextView).performClick()
+            assertEquals("1", pickedId)
+            assertFalse(player.playing)
+            assertEquals(View.GONE, (get(screen, "controls") as ViewGroup).visibility)
+            assertTrue(stage.hasFocus())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
 }

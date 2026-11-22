@@ -77,6 +77,9 @@ internal interface FeedBackend : Closeable {
         cursor: RecommendationCursor,
         category: DramaCategory? = null,
     ) = Unit
+
+    /** 首页播放控制：切换清晰度后同步更新取流清晰度。默认 no-op。 */
+    fun setQuality(quality: Int) {}
 }
 
 internal class PublicFeedBackend(
@@ -102,6 +105,9 @@ internal class PublicFeedBackend(
 
     private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository = ContentRepository(http, playbackSession = playbackSession)
+    @Volatile private var currentQuality: Int = quality
+
+    override fun setQuality(value: Int) { currentQuality = value }
     override fun related(series: Series) = RelatedWorks.ordered(series, repository.related(series.id))
 
     private val recommendationAccount = account
@@ -221,7 +227,7 @@ internal class PublicFeedBackend(
             http,
             repository,
             id,
-            quality,
+            currentQuality,
             CodecCapabilities::supports,
             recentSources,
             initialBytes = 32 * 1024,
@@ -386,6 +392,16 @@ internal interface TrialPlayback {
 
     fun position(): Long
 
+    /**
+     * 首页播放控制：跳转到本集指定位置（毫秒）。默认 no-op，保持既有测试替身兼容。
+     */
+    fun seekTo(position: Long) {}
+
+    /**
+     * 首页播放控制：即时调整倍速。默认 no-op，保持既有测试替身兼容。
+     */
+    fun setSpeed(speed: Float) {}
+
     fun clear()
 
     fun release()
@@ -415,7 +431,7 @@ internal fun shouldSelfHealTrial(
         attempts < TRIAL_SELF_HEAL_LIMIT
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-internal class Media3TrialPlayback(context: Context, private val speed: Float = 1f, private val frame: VideoFrameMode = VideoFrameMode.FIT) : TrialPlayback {
+internal class Media3TrialPlayback(context: Context, private var speed: Float = 1f, private val frame: VideoFrameMode = VideoFrameMode.FIT) : TrialPlayback {
     private var currentIndex = 0
     private var preloading = false
     private val preloadBuilder =
@@ -623,6 +639,16 @@ internal class Media3TrialPlayback(context: Context, private val speed: Float = 
     override fun duration() = player.duration.coerceAtLeast(0)
 
     override fun position() = player.currentPosition.coerceAtLeast(0)
+
+    override fun seekTo(position: Long) {
+        val duration = player.duration
+        if (duration > 0) player.seekTo(position.coerceIn(0, duration - 1)) else player.seekTo(position.coerceAtLeast(0))
+    }
+
+    override fun setSpeed(speed: Float) {
+        this.speed = speed
+        player.setPlaybackSpeed(speed)
+    }
 
     override fun clear() {
         // Leaving a series must not leave its last frame over another title or an error.

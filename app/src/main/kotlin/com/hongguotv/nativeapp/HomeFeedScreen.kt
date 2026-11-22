@@ -34,6 +34,12 @@ internal class HomeFeedScreen(
     private val autoNext: Boolean = true,
     private val restoreProgress: (String) -> WatchProgress? = { null },
     private val saveProgress: (WatchProgress, Int, Boolean) -> Unit = { _, _, _ -> },
+    // 首页播放控制：默认 no-op，既有调用方与测试替身无需改动即可继续工作。
+    private val initialSpeed: Float = 1f,
+    private val initialQuality: Int = 1080,
+    private val onSpeedChange: (Float) -> Unit = {},
+    private val onQualityChange: (Int) -> Unit = {},
+    private val openEpisodes: (Series) -> Unit = {},
 ) : LinearLayout(activity), Closeable {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
@@ -136,6 +142,29 @@ internal class HomeFeedScreen(
     private val comicButton: TextView
     private val realButton: TextView
 
+    // 首页播放控制条：覆盖在视频底部的紧凑控制区，由菜单键唤出，不改变既有的
+    // 上下左右/确定键语义，保证已经验证过的刷剧手感不受影响。
+    private val controls = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        visibility = View.GONE
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+        background = TvStyle.shape(activity, Color.argb(205, 8, 11, 16), radius = 6)
+    }
+    private val timeLabel = label("00:00 / 00:00", 13f, TvStyle.text).apply { isFocusable = false }
+    private val progressView = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
+        isFocusable = false
+        max = 1000
+        progress = 0
+    }
+    private lateinit var speedButton: TextView
+    private lateinit var qualityButton: TextView
+    private lateinit var episodeButton: TextView
+    private val controlButtons = mutableListOf<TextView>()
+    private var controlsVisible = false
+    private var currentSpeed: Float = 1f
+    private var currentQuality: Int = 1080
+
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
 
     private fun label(value: String, size: Float, color: Int = TvStyle.text) =
@@ -171,6 +200,109 @@ internal class HomeFeedScreen(
         button.background = TvStyle.card(activity, button.hasFocus(), button.isSelected)
         button.setTextColor(if (button.isSelected) TvVisual.accent else TvStyle.text)
         button.setTypeface(null, if (button.isSelected) Typeface.BOLD else Typeface.NORMAL)
+    }
+
+    private fun controlButton(value: String, action: () -> Unit) =
+        label(value, 13f).apply {
+            id = View.generateViewId()
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isClickable = true
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            minHeight = dp(40)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            background = TvStyle.card(activity, false)
+            setOnFocusChangeListener { _, _ -> paintButton(this) }
+            setOnClickListener { action() }
+        }
+
+    private fun formatTime(ms: Long): String {
+        val total = (ms.coerceAtLeast(0) / 1000).toInt()
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+    }
+
+    /** 仅更新进度条与时间文案；播放控制界面的显隐由菜单键驱动。 */
+    private fun paintPlaybackProgress() {
+        if (closed) return
+        val duration = playback.duration()
+        val position = playback.position().coerceAtLeast(0)
+        timeLabel.text = "${formatTime(position)} / ${formatTime(duration)}"
+        progressView.progress = if (duration > 0) (position * 1000 / duration).toInt().coerceIn(0, 1000) else 0
+    }
+
+    private fun paintControls() {
+        speedButton.text = "倍速 ${PlaybackSpeed.label(currentSpeed)}"
+        qualityButton.text = "清晰度 ${currentQuality}P"
+        val episodes = clip?.episodeCount ?: 0
+        episodeButton.text = if (episodes > 0) "选集 ${state.episodeIndex + 1}/$episodes" else "选集"
+        episodeButton.isEnabled = state.current != null && episodes > 0
+        paintPlaybackProgress()
+    }
+
+    /** 菜单键在画面与控制条之间切换，双向都保留焦点落点。 */
+    private fun toggleControls() {
+        if (state.current == null) return
+        controlsVisible = !controlsVisible
+        controls.visibility = if (controlsVisible) View.VISIBLE else View.GONE
+        if (controlsVisible) {
+            paintControls()
+            speedButton.requestFocus()
+        } else {
+            stage.requestFocus()
+        }
+        paintActions()
+    }
+
+    private fun closeControls() {
+        if (!controlsVisible) return
+        controlsVisible = false
+        controls.visibility = View.GONE
+        if (stage.isAttachedToWindow) stage.requestFocus()
+    }
+
+    private fun cycleSpeed() {
+        val options = PlaybackSpeed.options
+        val next = options[(options.indexOf(currentSpeed) + 1) % options.size]
+        currentSpeed = next
+        playback.setSpeed(next)
+        onSpeedChange(next)
+        paintControls()
+        Toast.makeText(activity, "首页倍速 ${PlaybackSpeed.label(next)}", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 清晰度改变需要重新取流，否则当前视频仍沿用旧清晰度。
+     * 保留当前集与播放位置，重新加载当前作品的首集/正在播放集。
+     */
+    private fun cycleQuality() {
+        val options = PlaybackQuality.options
+        val next = options[(options.indexOf(currentQuality) + 1) % options.size]
+        if (next == currentQuality) return
+        currentQuality = next
+        backend.setQuality(next)
+        onQualityChange(next)
+        paintControls()
+        val position = playback.position().coerceAtLeast(0)
+        state.position = position
+        remember(force = true)
+        clearCurrent()
+        clearCache()
+        loadCurrent("正在切换清晰度 · ${next}P")
+        Toast.makeText(activity, "已切换清晰度 ${next}P，正在重新加载", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun openEpisodePicker() {
+        val series = state.current ?: return
+        state.userPaused = true
+        playback.pause()
+        remember(force = true)
+        closeControls()
+        openEpisodes(series)
     }
 
     // 组装首页布局和点击事件；分类栏、内容区、操作栏按纵向排列。
@@ -235,6 +367,27 @@ internal class HomeFeedScreen(
         stage.clipToOutline = true
         stage.addView(playback.view, FrameLayout.LayoutParams(-1, -1))
         stage.addView(poster, FrameLayout.LayoutParams(-1, -1))
+        // 播放控制：时间 + 进度 + 倍速/清晰度/选集，覆盖在画面底部。
+        speedButton = controlButton("倍速") { cycleSpeed() }
+        qualityButton = controlButton("清晰度") { cycleQuality() }
+        episodeButton = controlButton("选集") { openEpisodePicker() }
+        controlButtons += listOf(speedButton, qualityButton, episodeButton)
+        timeLabel.minWidth = dp(96)
+        controls.addView(timeLabel, lp(-2, dp(44)))
+        controls.addView(progressView, lp(0, dp(12)).apply { weight = 1f; leftMargin = dp(10); rightMargin = dp(10) })
+        controlButtons.forEachIndexed { index, b ->
+            controls.addView(b, lp(-2, dp(44)).apply { if (index > 0) leftMargin = dp(8) })
+            b.nextFocusLeftId = controlButtons.getOrNull(index - 1)?.id ?: b.id
+            b.nextFocusRightId = controlButtons.getOrNull(index + 1)?.id ?: b.id
+            b.nextFocusUpId = b.id
+            b.nextFocusDownId = b.id
+        }
+        stage.addView(
+            controls,
+            FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM),
+        )
+        currentSpeed = PlaybackSpeed.normalize(initialSpeed)
+        currentQuality = PlaybackQuality.normalize(initialQuality)
         info.addView(tag)
         status.gravity = Gravity.CENTER
         status.textSize = 12f
@@ -303,7 +456,7 @@ internal class HomeFeedScreen(
         positionLabel.gravity = Gravity.CENTER
         positionLabel.setPadding(0, 0, 0, 0)
         addView(positionLabel, lp(-1, dp(24)))
-        addView(label("← →  换剧     OK  暂停 / 继续     ↓  操作     ↑  分类", 12f, TvStyle.muted).apply {
+        addView(label("← →  换剧     OK  暂停 / 继续     菜单  播放控制     ↓  操作     ↑  分类", 12f, TvStyle.muted).apply {
             gravity = Gravity.CENTER
         }, lp(-1, dp(24)))
         stage.nextFocusLeftId = stage.id
@@ -342,7 +495,24 @@ internal class HomeFeedScreen(
                     if (event.action == KeyEvent.ACTION_UP) toggle()
                     true
                 }
+                KeyEvent.KEYCODE_MENU -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) toggleControls()
+                    true
+                }
                 else -> false
+            }
+        }
+        // 控制条内：左/右在按钮间移动（焦点链已设置），返回键回到画面。
+        controlButtons.forEach { b ->
+            b.setOnKeyListener { _, key, event ->
+                if (event.action == KeyEvent.ACTION_DOWN &&
+                    (key == KeyEvent.KEYCODE_BACK || key == KeyEvent.KEYCODE_MENU)
+                ) {
+                    closeControls()
+                    true
+                } else {
+                    false
+                }
             }
         }
         playback.onError = { error -> lastPlaybackError = error }
@@ -404,6 +574,7 @@ internal class HomeFeedScreen(
                 checkBuffering(now)
                 ensureNextWorks()
                 prefetchUpcoming()
+                if (controlsVisible) paintPlaybackProgress()
                 if (now - lastCheckpoint >= 5000) { remember(); lastCheckpoint = now }
                 main.postDelayed(this, 250)
             }
@@ -571,6 +742,7 @@ internal class HomeFeedScreen(
             series?.description?.ifBlank { "当前剧集自动连续播放，左右切换其他作品。" } ?: "选择漫剧或真人剧，左右换一部，找到想追的故事。"
         tag.text = if (state.recommendation) "推荐 · 随心看" else "${state.category.label}推荐 · 随心看"
         paintActions()
+        if (controlsVisible) paintControls()
     }
 
     private fun remember(completed: Boolean = false, force: Boolean = false) {
@@ -880,6 +1052,7 @@ internal class HomeFeedScreen(
         }
         heldEpisode = null
         paintActions()
+        if (controlsVisible) paintControls()
     }
 
     private fun finishEpisode() {
