@@ -33,6 +33,8 @@ internal class HomeFeedScreen(
     private val related: (Series, View) -> Unit = { _, _ -> },
     private val autoNext: Boolean = true,
     private val restoreProgress: (String) -> WatchProgress? = { null },
+    // 推荐流默认关闭：启动即随机从头播放，不读取观看历史续播。默认 true 兼容既有测试替身。
+    private val restoreWatchProgress: Boolean = true,
     private val saveProgress: (WatchProgress, Int, Boolean) -> Unit = { _, _, _ -> },
     // 首页播放控制：默认 no-op，既有调用方与测试替身无需改动即可继续工作。
     private val initialSpeed: Float = 1f,
@@ -94,7 +96,9 @@ internal class HomeFeedScreen(
     private var manuallyStarted: String? = null
     private var loading = false
     private var failed = false
-    private val trialRecoveryBudget = RecoveryBudget(listOf(2000L, 5000L))
+    // 空响应多为服务端持续窗口，缩短慢段退避，避免"一直重试"的观感；正式播放页仍用完整退避。
+    private val trialRecoveryBudget = RecoveryBudget(
+        listOf(2000L, 5000L), listOf(15000L, 20000L, 25000L))
     private var trialPreparationUntil = 0L
     private var trialRecovery: Runnable? = null
     private val exhaustedCursors = mutableSetOf<RecommendationCursor>()
@@ -993,10 +997,10 @@ internal class HomeFeedScreen(
                 if (remaining <= 0) {
                     trialRecovery = null
                     if (bothModelsEmpty) trialPreparationUntil = android.os.SystemClock.elapsedRealtime() + 20_000
-                    loadCurrent("正在恢复播放 · 第 $attempt/$total 次", recovering = true)
+                    loadCurrent("正在重新获取播放数据 · $attempt/$total", recovering = true)
                 } else {
                     status.visibility = View.VISIBLE
-                    status.text = "播放信息暂时为空 · ${(remaining + 999) / 1000} 秒后自动恢复 $attempt/$total"
+                    status.text = "播放源暂无数据 · ${(remaining + 999) / 1000} 秒后重试 $attempt/$total"
                     main.postDelayed(this, minOf(1000L, remaining))
                 }
             }
@@ -1053,7 +1057,7 @@ internal class HomeFeedScreen(
                             diagnosticDetail(error)?.take(640)?.let {
                                 android.util.Log.i("HongguoTV", "Home playback recovery exhausted: $it")
                             }
-                            status.text = "播放恢复未成功 · 可按确定重试，或按 ← → 换一部"
+                            status.text = "播放源暂不可用 · 可按确定重试，或按 ← → 换一部"
                         } else status.text = "暂时无法加载 · ${message.ifBlank { "请重试或换一部" }}"
                         paintActions()
                     }
@@ -1093,7 +1097,7 @@ internal class HomeFeedScreen(
     // 优先复用缓存或正在进行的预加载，避免为同一部作品重复请求。
     private fun loadCurrent(statusHint: String? = null, recovering: Boolean = false, settle: Boolean = false, continuingEpisode: Boolean = false) {
         val series = state.current ?: return
-        if (restoredSeries != series.id) {
+        if (restoreWatchProgress && restoredSeries != series.id) {
             restoredSeries = series.id
             restoreProgress(series.id)?.takeIf { !it.completed }?.let {
                 state.episodeIndex = it.episodeIndex
@@ -1396,7 +1400,7 @@ internal class HomeFeedScreen(
             return
         }
         val target = state.items.getOrNull(state.index + delta) ?: return
-        val ready = if (restoreProgress(target.id)?.let { !it.completed && (it.episodeIndex > 0 || it.position > 0) } == true) null else takeCached(target.id)
+        val ready = if (restoreWatchProgress && restoreProgress(target.id)?.let { !it.completed && (it.episodeIndex > 0 || it.position > 0) } == true) null else takeCached(target.id)
         clearCurrent(
             retain = true,
             keepPlayer = ready != null,

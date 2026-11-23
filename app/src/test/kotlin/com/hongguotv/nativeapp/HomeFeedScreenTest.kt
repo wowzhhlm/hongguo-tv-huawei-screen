@@ -367,6 +367,24 @@ class HomeFeedScreenTest {
         } finally { screen.close(); controller.pause().stop().destroy() }
     }
 
+    @Test fun recommendationFeedStartsFromFirstEpisodeDespiteSavedProgress() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val player = Playback(activity)
+        val prior = WatchProgress(Series("1", "作品1"), "102", 1, 12000, 60000, false, 1)
+        val screen = HomeFeedScreen(activity, DramaFeedState(), listOf(TextView(activity)), {},
+            { _, _ -> }, { "收藏" }, Backend(), player,
+            restoreProgress = { if (it == "1") prior else null },
+            restoreWatchProgress = false)
+        try {
+            activity.setContentView(screen)
+            screen.start(true, false)
+            pump(screen)
+            // 推荐流忽略历史进度，从第 1 集（试看集）开始，而不是接着看 102。
+            assertEquals("101", (get(screen, "clip") as TrialClip).episodeId)
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
     @Test fun disabledAutoNextStopsAtEpisodeBoundaryAndRecordsCompletion() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
@@ -650,7 +668,7 @@ class HomeFeedScreenTest {
         try {
             TrialRecoveryFixture { _, _ -> runCatching { repository.streamLadderWithCompatibility("101") }.exceptionOrNull() }.use { f ->
                 assertEquals(1, registrations.get())
-                assertTrue(f.hasText("2 秒后自动恢复"))
+                assertTrue(f.hasText("2 秒后重试"))
                 assertFalse(f.hasText("character"))
                 f.advance(2)
                 assertEquals(2, registrations.get())
@@ -665,11 +683,11 @@ class HomeFeedScreenTest {
     fun emptyTrialAutomaticallyRecoversTwiceWithoutManualClicks() {
         TrialRecoveryFixture { _, count -> if (count <= 2) EmptyPlaybackResponseException() else null }.use { f ->
             assertEquals(1, f.reads())
-            assertTrue(f.hasText("2 秒后自动恢复 1/2"))
+            assertTrue(f.hasText("2 秒后重试 1/2"))
             assertEquals("", f.player.loaded)
             f.advance(2)
             assertEquals(2, f.reads())
-            assertTrue(f.hasText("5 秒后自动恢复 2/2"))
+            assertTrue(f.hasText("5 秒后重试 2/2"))
             f.advance(5)
             assertEquals(3, f.reads())
             assertEquals("1", f.player.loaded)
@@ -685,13 +703,13 @@ class HomeFeedScreenTest {
             f.advance(2)
             f.advance(5)
             assertEquals(3, f.reads())
-            assertTrue(f.hasText("播放恢复未成功"))
+            assertTrue(f.hasText("播放源暂不可用"))
             assertFalse(f.hasText("G:b=200/0B/h2"))
             f.advance(60)
             assertEquals(3, f.reads())
             f.clickStage()
             assertEquals(4, f.reads())
-            assertTrue(f.hasText("自动恢复 1/2"))
+            assertTrue(f.hasText("重试 1/2"))
         }
     }
 
@@ -703,7 +721,7 @@ class HomeFeedScreenTest {
             fixture.advance(2)
             fixture.advance(5)
             assertEquals(3, fixture.reads())
-            assertTrue(fixture.hasText("15 秒后自动恢复 3/7"))
+            assertTrue(fixture.hasText("15 秒后重试 3/5"))
             fixture.advance(14)
             assertEquals(3, fixture.reads())
             fixture.advance(1)
@@ -734,7 +752,7 @@ class HomeFeedScreenTest {
             f.screen.resume()
             pump(f.screen)
             assertEquals(2, f.reads())
-            assertTrue(f.hasText("自动恢复 1/2"))
+            assertTrue(f.hasText("重试 1/2"))
             f.screen.close()
             f.advance(20)
             assertEquals(2, f.reads())
@@ -766,7 +784,7 @@ class HomeFeedScreenTest {
         TrialRecoveryFixture { _, _ -> ContentHttpException(403) }.use { f ->
             f.advance(20)
             assertEquals(1, f.reads())
-            assertFalse(f.hasText("自动恢复"))
+            assertFalse(f.hasText("秒后重试"))
             assertTrue((get(f.screen, "stage") as View).contentDescription.contains("重试播放"))
         }
     }

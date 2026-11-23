@@ -1150,6 +1150,8 @@ class MainActivity : Activity() {
                     related = ::showHomeRelated,
                     autoNext = library.autoNext,
                     restoreProgress = library::progress,
+                    // 推荐流是随机连续播放，不从观看历史接着看；看过的剧仍照常记入历史。
+                    restoreWatchProgress = false,
                     saveProgress = { progress, count, force ->
                         library.save(progress)
                         cloudAccount.upload(CloudProgress(progress.series, progress.episodeId,

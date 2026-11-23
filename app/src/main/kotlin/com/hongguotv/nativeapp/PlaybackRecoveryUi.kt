@@ -18,9 +18,9 @@ internal fun recoveryStatusText(
 ): String {
     val seconds = ((remainingMillis + 999) / 1000).coerceAtLeast(0)
     return if (slow)
-        "$failure\n服务暂时没有响应，正在自动恢复 · $seconds 秒后第 $attempt/$total 次尝试 · $positionText"
+        "$failure\n播放源暂时无数据，正在重试 · $seconds 秒后第 $attempt/$total 次尝试 · $positionText"
     else
-        "$failure\n${if (autoplay) "准备恢复播放" else "准备恢复暂停位置"} · $seconds 秒后重试 $attempt/$total · $positionText"
+        "$failure\n${if (autoplay) "准备重新获取播放数据" else "准备恢复暂停位置"} · $seconds 秒后重试 $attempt/$total · $positionText"
 }
 
 internal fun recoveryExhaustedText(failure: String) =

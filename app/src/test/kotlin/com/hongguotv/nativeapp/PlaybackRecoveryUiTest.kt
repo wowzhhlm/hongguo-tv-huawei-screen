@@ -27,14 +27,14 @@ class PlaybackRecoveryUiTest {
                 remainingMillis = 2500L,
                 positionText = "12:34",
             )
-        assertEquals("$failure\n准备恢复播放 · 3 秒后重试 2/8 · 12:34", text)
+        assertEquals("$failure\n准备重新获取播放数据 · 3 秒后重试 2/8 · 12:34", text)
     }
 
     @Test
     fun `remaining millis round up to whole seconds`() {
         val text =
             recoveryStatusText(failure, autoplay = true, slow = false, attempt = 1, total = 8, remainingMillis = 1L, positionText = "00:05")
-        assertEquals("$failure\n准备恢复播放 · 1 秒后重试 1/8 · 00:05", text)
+        assertEquals("$failure\n准备重新获取播放数据 · 1 秒后重试 1/8 · 00:05", text)
     }
 
     @Test
@@ -48,7 +48,7 @@ class PlaybackRecoveryUiTest {
     fun `slow phase keeps recovery wording with a visible countdown`() {
         val text =
             recoveryStatusText(failure, autoplay = true, slow = true, attempt = 5, total = 8, remainingMillis = 60000L, positionText = "12:34")
-        assertEquals("$failure\n服务暂时没有响应，正在自动恢复 · 60 秒后第 5/8 次尝试 · 12:34", text)
+        assertEquals("$failure\n播放源暂时无数据，正在重试 · 60 秒后第 5/8 次尝试 · 12:34", text)
     }
 
     @Test

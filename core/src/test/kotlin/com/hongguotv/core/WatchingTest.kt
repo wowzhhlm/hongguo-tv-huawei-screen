@@ -124,6 +124,19 @@ class WatchingTest {
     }
 
     @Test
+    fun `custom slow delays shrink recommendation budget without changing default`() {
+        val default = RecoveryBudget()
+        val feed = RecoveryBudget(listOf(2000L, 5000L), listOf(15000L, 20000L, 25000L))
+        assertEquals(8, default.total)
+        assertEquals(5, feed.total)
+        repeat(2) { feed.consume() }
+        assertEquals(15000L, feed.delayMillis)
+        assertTrue(feed.slow)
+        repeat(3) { default.consume() }
+        assertEquals(15000L, default.delayMillis)
+    }
+
+    @Test
     fun `automatic recovery is bounded until the user starts a new attempt`() {
         val budget = RecoveryBudget()
         // 快段三次紧跟失败现场。

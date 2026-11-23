@@ -15,9 +15,12 @@ object PlaybackQuality {
  * 两段式（issue #38）：默认快段三次（约 8.5 秒），慢段退避拉长到累计约五分钟，覆盖
  * 服务端秒级到分钟级的空响应窗口；快段救「一瞬间坏了」，慢段救「这一阵子坏了」。
  */
-class RecoveryBudget(fastDelaysMillis: List<Long> = FAST_DELAYS_MILLIS) {
+class RecoveryBudget(
+    fastDelaysMillis: List<Long> = FAST_DELAYS_MILLIS,
+    slowDelaysMillis: List<Long> = SLOW_DELAYS_MILLIS,
+) {
     val fastAttempts = fastDelaysMillis.size
-    private val delaysMillis = fastDelaysMillis + SLOW_DELAYS_MILLIS
+    private val delaysMillis = fastDelaysMillis + slowDelaysMillis
 
     var attempts = 0
         private set
