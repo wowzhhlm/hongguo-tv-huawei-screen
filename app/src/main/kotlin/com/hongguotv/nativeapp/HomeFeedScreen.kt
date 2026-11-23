@@ -45,6 +45,10 @@ internal class HomeFeedScreen(
 ) : LinearLayout(activity), Closeable {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
+    // 互动数据探测是可选的慢网络读取（两次公开网页请求，最长 20 秒）。它与播放取流
+    // 若共用 worker，网络拥塞时会占满 2 个线程，令播放请求排队超时、误报空响应并触发
+    // 自动恢复。改用独立单线程池，保证社交探测永远不会阻塞播放/预加载。
+    private val socialWorker = Executors.newSingleThreadExecutor()
     private var generation = 0
     private var scope: RequestScope? = null
     private var job: java.util.concurrent.Future<*>? = null
@@ -125,7 +129,7 @@ internal class HomeFeedScreen(
         val requestScope = RequestScope()
         socialScope = requestScope
         val episodeId = clip?.episodeId.orEmpty()
-        socialJob = worker.submit {
+        socialJob = socialWorker.submit {
             val count = runCatching { requestScope.run { socialStats(series, episodeId) } }.getOrNull()
             main.post {
                 if (!closed && active && state.current?.id == series.id && socialScope === requestScope && count != null) {
@@ -160,6 +164,14 @@ internal class HomeFeedScreen(
     }
     private val title = label("发现下一部好剧", 25f)
     private val meta = label("随心看", 13f, TvVisual.accent)
+    // 桌面版推荐页在画面右上显示「当前集/总集」，纯展示不占焦点。
+    private val episodeBadge = label("", 15f, Color.WHITE).apply {
+        tag = "episode:badge"
+        gravity = Gravity.CENTER
+        isFocusable = false
+        setPadding(dp(10), dp(5), dp(10), dp(5))
+        background = TvStyle.shape(activity, Color.argb(170, 8, 11, 16), radius = 12)
+    }
     private val intro = label("左右换剧，当前作品自动连播。", 15f, TvStyle.muted)
     private val status = label("正在准备热门作品…", 15f)
     private val tag = label("热门发现", 12f, TvVisual.accent)
@@ -447,6 +459,12 @@ internal class HomeFeedScreen(
         stage.clipToOutline = true
         stage.addView(playback.view, FrameLayout.LayoutParams(-1, -1))
         stage.addView(poster, FrameLayout.LayoutParams(-1, -1))
+        stage.addView(
+            episodeBadge,
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(10); rightMargin = dp(12)
+            },
+        )
         // 右侧互动栏：仅展示真实可得的评论数与收藏状态，纯展示不占焦点。
         buildSocialRail()
         // 播放控制：时间 + 进度 + 倍速/清晰度/选集，覆盖在画面底部。
@@ -744,6 +762,9 @@ internal class HomeFeedScreen(
         return true
     }
 
+    /** 操作栏是否持有焦点，供返回键决策「先退回画面」还是「直接退出」。 */
+    fun actionsHasFocus(): Boolean = actions.hasFocus()
+
     fun refreshAccountLabel() {
         if (!closed) {
             paintActions()
@@ -817,6 +838,8 @@ internal class HomeFeedScreen(
         ensureNextWorks()
         positionLabel.text = if (series == null) "正在发现好剧" else "第 ${state.index + 1} 部 · 左右换剧 · ${if (autoNext) "自动连播下一集" else "播完本集停止"}"
         title.text = series?.title ?: "发现下一部好剧"
+        // 换剧瞬间总数未知，先清空角标，待 attach 拿到真实集数再填充，避免显示假数字。
+        if (series?.id != clip?.detail?.series?.id) episodeBadge.text = ""
         meta.text =
             if (series == null) "随心看"
             else
@@ -1126,6 +1149,7 @@ internal class HomeFeedScreen(
         val series = next.detail.series
         val tags = series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
         meta.text = "第 ${next.trialEpisodeIndex} 集 · 共 ${next.episodeCount} 集$tags"
+        episodeBadge.text = "${next.trialEpisodeIndex}/${next.episodeCount} 集"
         if (series.description.isNotBlank()) intro.text = series.description
         val autoplay = active && !state.userPaused && !state.ended
         playback.setCurrentIndex(state.offset + state.index)
@@ -1451,6 +1475,7 @@ internal class HomeFeedScreen(
         playback.release()
         backend.close()
         worker.shutdownNow()
+        socialWorker.shutdownNow()
         catalogWorker.shutdownNow()
     }
 }

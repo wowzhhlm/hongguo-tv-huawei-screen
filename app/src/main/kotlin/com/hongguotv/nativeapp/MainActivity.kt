@@ -4989,9 +4989,20 @@ class MainActivity : Activity() {
             if (settingsRows.any { it.hasFocus() }) { settingsSidebar.getOrNull(settingsGroup)?.requestFocus(); return }
             if (settingsSidebar.any { it.hasFocus() }) { nav[6].requestFocus(); return }
         }
-        if (screen == "catalog" && tab == 8 && !nav[8].hasFocus()) {
-            if (homeFeed?.back() == true) return
-            nav[8].requestFocus()
+        if (screen == "catalog" && tab == 8) {
+            // 启动即播后焦点常驻画面：画面上按返回直接弹退出确认，避免两段式返回
+            // 在真机上表现为「按了没反应、退不出去」；操作栏焦点仍先退回画面。
+            when (
+                recommendationBackResult(
+                    navigationFocused = catalogShell?.hasNavigationFocus == true,
+                    actionsFocused = homeFeed?.actionsHasFocus() == true,
+                )
+            ) {
+                RecommendationBackResult.CONFIRM_EXIT ->
+                    tvTools.confirm("退出hongguoTV", "确定退出？", currentFocus) { finish() }
+                RecommendationBackResult.RETURN_TO_STAGE -> homeFeed?.back()
+                RecommendationBackResult.DELEGATE -> nav[8].requestFocus()
+            }
             return
         }
         if (screen == "catalog" && tab == 7 && tvSearchPanel != null && !nav[7].hasFocus()) {

@@ -1402,6 +1402,25 @@ class HomeFeedScreenTest {
     }
 
     @Test
+    fun episodeBadgeShowsCurrentAndTotalOnPlaybackScreen() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val backend = Backend()
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, backend, player)
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS); pump(screen)
+            val badge = screen.findViewWithTag<TextView>("episode:badge")
+            assertNotNull(badge)
+            // Backend.detail 每部 2 集，试播首集：原型要求画面右上「当前/总数 集」。
+            assertEquals("1/2 集", badge.text.toString())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test
     fun socialRailShowsRealCommentCountFormatted() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
@@ -1417,6 +1436,23 @@ class HomeFeedScreenTest {
             assertEquals("15.6万", comment.text.toString())
             val favorite = screen.findViewWithTag<TextView>("social:favorite")
             assertEquals("收藏", favorite.text.toString())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test
+    fun socialProbeUsesDedicatedPoolSoItCannotStarvePlayback() {
+        // 回归：互动探测若与播放取流共用 2 线程 worker，慢网络会占满线程，
+        // 令播放请求排队超时并误报「空响应」。断言两者是独立的执行器。
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player)
+        fun pool(name: String): Any =
+            HomeFeedScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen)!!
+        try {
+            assertNotSame("社交探测不得复用播放 worker", pool("worker"), pool("socialWorker"))
         } finally { screen.close(); controller.pause().stop().destroy() }
     }
 
