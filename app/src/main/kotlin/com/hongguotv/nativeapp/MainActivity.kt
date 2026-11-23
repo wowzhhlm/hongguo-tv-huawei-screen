@@ -104,7 +104,7 @@ class MainActivity : Activity() {
             }
             return JSONObject().put("message", "已发送遥控指令")
         }
-        if (!active) return JSONObject().put("error", "请先选择剧目并在电视播放；首页可使用方向遥控")
+        if (!active) return JSONObject().put("error", "请先选择剧目并在电视播放；推荐页可使用方向遥控")
         when (action) {
             "pause" -> requestPlayback(false)
             "resume" -> requestPlayback(true)
@@ -404,6 +404,8 @@ class MainActivity : Activity() {
         }
     }
     private lateinit var root: FrameLayout
+    // 推荐页右侧互动栏的真实评论数来源（公开只读接口，无账号凭据）。
+    private val feedComments by lazy { PublicComments(okhttp3.OkHttpClient()) }
     private var generation = 0
     private var screen = "catalog"
     private var tab = 8 // 首页即随心看：沉浸式推荐流是默认首页
@@ -1162,6 +1164,18 @@ class MainActivity : Activity() {
                         focusEpisodesOnDetail = true
                         openDetail(series, resume = true, fromHome = true)
                     },
+                    socialStats = { series, episodeId ->
+                        try {
+                            if (episodeId.isEmpty()) null
+                            else
+                                feedComments
+                                    .read(series.id, episodeId)
+                                    .optJSONObject("comments")
+                                    ?.optLong("total", 0)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    },
                 )
             homeFeed = feed
             container.addView(feed, lp(-1, 0).apply { weight = 1f })
@@ -1412,7 +1426,7 @@ class MainActivity : Activity() {
                 },
                 { problem ->
                     if (requestTab == 0 && requestPage == 1 && collection == null) {
-                        homeScreen?.showStatus(if (catalog.isEmpty()) "热门暂时无法加载，请稍后重新进入首页" else "")
+                        homeScreen?.showStatus(if (catalog.isEmpty()) "热门暂时无法加载，请稍后重新进入推荐" else "")
                         return@work
                     }
                     catalog = emptyList()
@@ -1442,7 +1456,7 @@ class MainActivity : Activity() {
         if (collection != null) {
             val heading = row()
             collectionBack =
-                addButton(heading, "‹ 返回首页") {
+                addButton(heading, "‹ 返回推荐") {
                         leaveCollection()
                         showCatalog()
                     }
@@ -1535,7 +1549,7 @@ class MainActivity : Activity() {
             preview.visibility = View.GONE
             message(list, if (loading) "正在加载推荐…" else empty)
             if (!loading && (isHistory() || isFavorites())) {
-                addButton(list, "去首页看看") { switchTab(8) }
+                addButton(list, "去推荐看看") { switchTab(8) }
             }
             if ((tab <= 2 || localCatalog()) && page > 1)
                 addButton(list, "上一页") {
@@ -2428,7 +2442,7 @@ class MainActivity : Activity() {
                             showCatalog()
                         }, selected = TvStyle.themes.indexOf(TvStyle.current))
                     }
-                    val labels = listOf("首页", "找剧", "排行榜", "收藏", "观看历史", "账户预约", "设置", "搜索", "随心看")
+                    val labels = listOf("推荐", "找剧", "排行榜", "收藏", "观看历史", "账户预约", "设置", "搜索", "随心看")
                     lateinit var startup: TextView
                     startup = setting("启动页面  ·  ${labels[library.startupPage]}") {
                         tvTools.choose("启动页面", labels, startup, { choice ->
@@ -5142,7 +5156,11 @@ class MainActivity : Activity() {
             if (initialCatalogPending) showCatalog(load = true)
             else if (restoreStoppedPage) {
                 restoreStoppedPage = false
-                when (screen) {
+                if (tab == 8 && homeFeed != null) {
+                    // 切后台保留了推荐页播放器实例：直接恢复，避免 showCatalog 重建
+                    // 造成 surface 重新绑定失败/黑屏。下面 5183 行的 resume 亦幂等。
+                    homeFeed?.resume()
+                } else when (screen) {
                     "player" -> playEpisode(episodeIndex, startPosition, autoplay = false)
                     "detail" ->
                         if (detail != null) showDetail(false)
@@ -5213,10 +5231,11 @@ class MainActivity : Activity() {
     }
 
     // 应用离开前台时暂停播放及后台活动，防止页面不可见时继续消耗资源。
+    // 注意：切后台不销毁首页播放器（保留 surface 绑定），否则呼出后 surface 无 player
+    // 会黑屏且不会自动重绑，只能杀进程冷启动恢复。真正的释放在离开推荐页/Activity 销毁时完成。
     override fun onStop() {
         phoneConsole.stop()
-        homeFeed?.close()
-        homeFeed = null
+        homeFeed?.pause()
         restoreStoppedPage = true
         generation++
         cancelWork()

@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.view.KeyEvent
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.ImageView
 import android.widget.Space
 import android.widget.TextView
 
@@ -16,8 +15,8 @@ internal interface HandlesHorizontalKeys
 internal class CatalogShell(context: Context, private val phone: (View) -> Unit = {}, private val navigate: (Int) -> Unit) : LinearLayout(context) {
     val body = LinearLayout(context).apply { orientation = VERTICAL }
     private val rail = LinearLayout(context).apply { orientation = VERTICAL }
-    // 首页即随心看：tab 8 是沉浸式播放流，显示为“首页”；观看历史提升为一级入口。
-    private val destinations = listOf(8 to "首页", 4 to "观看历史", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的", 9 to "扫码", 6 to "设置")
+    // 首页即桌面版推荐页：tab 8 是启动即播的沉浸式推荐流，菜单显示为“推荐”。
+    private val destinations = listOf(8 to "推荐", 4 to "观看历史", 1 to "找剧", 7 to "搜索", 2 to "排行榜", 3 to "我的", 9 to "扫码", 6 to "设置")
     private val buttons = mutableListOf<TextView>()
     private var remembered: View? = null
     private var selectedDestination = 8
@@ -41,12 +40,13 @@ internal class CatalogShell(context: Context, private val phone: (View) -> Unit 
         setBackgroundColor(TvStyle.background)
         rail.setPadding(dp(12), dp(if (compact) 12 else 20), dp(12), dp(if (compact) 12 else 16))
         rail.setBackgroundColor(TvStyle.background)
-        rail.addView(ImageView(context).apply {
-            setImageResource(R.drawable.brand_mark)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "hongguoTV"
+        rail.addView(TextView(context).apply {
+            text = "红果短剧TV版"
+            textSize = if (compact) 12f else 14f
+            setTextColor(TvStyle.text)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             isFocusable = false
-            (drawable as? android.graphics.drawable.BitmapDrawable)?.isFilterBitmap = false
+            gravity = android.view.Gravity.CENTER_VERTICAL
         }, LayoutParams(-1, dp(if (compact) 40 else 56)).apply { bottomMargin = dp(if (compact) 12 else 24) })
         destinations.forEach { (index, label) ->
             if (index == 9) rail.addView(Space(context), LayoutParams(1, 0, 1f))

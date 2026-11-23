@@ -1400,4 +1400,40 @@ class HomeFeedScreenTest {
             assertTrue(stage.hasFocus())
         } finally { screen.close(); controller.pause().stop().destroy() }
     }
+
+    @Test
+    fun socialRailShowsRealCommentCountFormatted() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player, socialStats = { _, _ -> 156000L })
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS); pump(screen)
+            val comment = screen.findViewWithTag<TextView>("social:comments")
+            assertNotNull(comment)
+            assertEquals("15.6万", comment.text.toString())
+            val favorite = screen.findViewWithTag<TextView>("social:favorite")
+            assertEquals("收藏", favorite.text.toString())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
+
+    @Test
+    fun socialRailOmitsCountWhenSourceUnavailable() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val state = DramaFeedState().apply { append(CatalogPage(listOf(Series("1", "第一部")), false), 1) }
+        val player = Playback(activity, prefetchEnabled = false)
+        val screen = HomeFeedScreen(activity, state, listOf(TextView(activity)), {}, { _, _ -> },
+            { "收藏" }, Backend(), player, socialStats = { _, _ -> null })
+        try {
+            activity.setContentView(screen); screen.start(true, false); pump(screen)
+            ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS); pump(screen)
+            val comment = screen.findViewWithTag<TextView>("social:comments")
+            assertNotNull(comment)
+            assertTrue("无真实数据时不得编造数字", comment.text.toString().isEmpty())
+        } finally { screen.close(); controller.pause().stop().destroy() }
+    }
 }

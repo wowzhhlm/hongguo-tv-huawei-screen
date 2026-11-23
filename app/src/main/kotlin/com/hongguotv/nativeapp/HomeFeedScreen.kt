@@ -40,6 +40,8 @@ internal class HomeFeedScreen(
     private val onSpeedChange: (Float) -> Unit = {},
     private val onQualityChange: (Int) -> Unit = {},
     private val openEpisodes: (Series) -> Unit = {},
+    // 互动统计：返回真实评论数；无法获取时返回 null，界面不显示占位假数。默认关闭以保持测试替身兼容。
+    private val socialStats: (Series, String) -> Long? = { _, _ -> null },
 ) : LinearLayout(activity), Closeable {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
@@ -106,6 +108,34 @@ internal class HomeFeedScreen(
     private var relatedProbe: Runnable? = null
     private var relatedScope: RequestScope? = null
     private var relatedJob: java.util.concurrent.Future<*>? = null
+    // 右侧互动栏：只展示可真实获取的数据（评论数、收藏状态），不编造点赞/收藏总数。
+    private val commentCounts = linkedMapOf<String, Long>()
+    private var socialScope: RequestScope? = null
+    private var socialJob: java.util.concurrent.Future<*>? = null
+    private lateinit var commentCountView: TextView
+    private lateinit var favoriteCountView: TextView
+
+    private fun probeSocial(series: Series?) {
+        socialScope?.cancel()
+        socialJob?.cancel(true)
+        if (series == null || commentCounts.containsKey(series.id)) {
+            paintSocial()
+            return
+        }
+        val requestScope = RequestScope()
+        socialScope = requestScope
+        val episodeId = clip?.episodeId.orEmpty()
+        socialJob = worker.submit {
+            val count = runCatching { requestScope.run { socialStats(series, episodeId) } }.getOrNull()
+            main.post {
+                if (!closed && active && state.current?.id == series.id && socialScope === requestScope && count != null) {
+                    commentCounts[series.id] = count
+                    while (commentCounts.size > 24) commentCounts.remove(commentCounts.keys.first())
+                    paintSocial()
+                }
+            }
+        }
+    }
 
     private fun probeRelated(series: Series?) {
         relatedProbe?.let(main::removeCallbacks)
@@ -176,6 +206,56 @@ internal class HomeFeedScreen(
         }
 
     private fun lp(w: Int = -1, h: Int = -2) = LayoutParams(w, h)
+
+    private fun socialIcon(glyph: String, captionView: TextView): TextView =
+        label(glyph, 20f, Color.WHITE).apply {
+            gravity = Gravity.CENTER
+            isFocusable = false
+            setPadding(0, dp(6), 0, 0)
+            captionView.gravity = Gravity.CENTER
+            captionView.setTextColor(Color.WHITE)
+            captionView.textSize = 12f
+            captionView.isFocusable = false
+            captionView.setPadding(0, dp(2), 0, dp(10))
+        }
+
+    private fun buildSocialRail() {
+        val rail =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                isFocusable = false
+                background = TvStyle.shape(activity, Color.argb(150, 8, 11, 16), radius = 20)
+                setPadding(dp(10), dp(10), dp(10), dp(6))
+            }
+        commentCountView = label("…", 12f, Color.WHITE).apply { tag = "social:comments" }
+        favoriteCountView = label("…", 12f, Color.WHITE).apply { tag = "social:favorite" }
+        rail.addView(socialIcon("评", commentCountView))
+        rail.addView(commentCountView)
+        rail.addView(socialIcon("藏", favoriteCountView))
+        rail.addView(favoriteCountView)
+        stage.addView(
+            rail,
+            FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL).apply {
+                rightMargin = dp(12)
+            },
+        )
+        paintSocial()
+    }
+
+    private fun paintSocial() {
+        if (!::commentCountView.isInitialized) return
+        val series = state.current
+        commentCountView.text =
+            series?.id?.let { commentCounts[it] }?.let { formatCount(it) } ?: ""
+        favoriteCountView.text = series?.id?.let { favoriteLabel(it) } ?: ""
+    }
+
+    private fun formatCount(value: Long): String =
+        when {
+            value >= 10000 -> "%.1f万".format(value / 10000.0)
+            else -> value.toString()
+        }
 
     private fun button(value: String, action: () -> Unit) =
         label(value, 14f).apply {
@@ -367,6 +447,8 @@ internal class HomeFeedScreen(
         stage.clipToOutline = true
         stage.addView(playback.view, FrameLayout.LayoutParams(-1, -1))
         stage.addView(poster, FrameLayout.LayoutParams(-1, -1))
+        // 右侧互动栏：仅展示真实可得的评论数与收藏状态，纯展示不占焦点。
+        buildSocialRail()
         // 播放控制：时间 + 进度 + 倍速/清晰度/选集，覆盖在画面底部。
         speedButton = controlButton("倍速") { cycleSpeed() }
         qualityButton = controlButton("清晰度") { cycleQuality() }
@@ -663,7 +745,10 @@ internal class HomeFeedScreen(
     }
 
     fun refreshAccountLabel() {
-        if (!closed) paintActions()
+        if (!closed) {
+            paintActions()
+            paintSocial()
+        }
     }
 
     fun currentPlayback(seriesId: String): TrialClip? {
@@ -1036,6 +1121,8 @@ internal class HomeFeedScreen(
         playbackReady = false
         clip = next
         state.episodeIndex = next.trialEpisodeIndex - 1
+        // clip 已就绪，此时才探测真实评论数（describe 阶段 clip 尚未赋值会取到空集）。
+        probeSocial(next.detail.series)
         val series = next.detail.series
         val tags = series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
         meta.text = "第 ${next.trialEpisodeIndex} 集 · 共 ${next.episodeCount} 集$tags"
@@ -1353,6 +1440,8 @@ internal class HomeFeedScreen(
         relatedProbe?.let(main::removeCallbacks)
         relatedScope?.cancel()
         relatedJob?.cancel(true)
+        socialScope?.cancel()
+        socialJob?.cancel(true)
         clearCurrent()
         clearCache()
         active = false
