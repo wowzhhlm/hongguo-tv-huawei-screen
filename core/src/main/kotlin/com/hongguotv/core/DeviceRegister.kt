@@ -102,20 +102,25 @@ object DeviceRegister {
     fun payload(device: Map<String, String>, now: Long = System.currentTimeMillis()): ByteArray {
         fun value(key: String, fallback: String) =
             device[key]?.takeIf { it.isNotBlank() } ?: fallback
+        // 2026-11-23：注册画像必须与后续播放请求的画像自洽。旧实现把 version_code 写死
+        // 73932，而播放请求覆盖成 71332/74332/73932 不等，服务端核验设备身份时容易判为
+        // 异常客户端并静默返回 200/0B。改为从同一套画像取值，缺省仍保持历史形态。
+        val versionCode = value("version_code", "73932").toIntOrNull() ?: 73932
+        val versionName = value("version_name", "7.3.9.32")
         val json = org.json.JSONObject()
         json.put("magic_tag", "ss_app_log")
         json.put(
             "header",
             org.json.JSONObject().apply {
                 put("display_name", "红果免费短剧")
-                put("update_version_code", 73932)
-                put("manifest_version_code", 73932)
-                put("app_version_minor", "7.3.9.32")
+                put("update_version_code", versionCode)
+                put("manifest_version_code", versionCode)
+                put("app_version_minor", versionName)
                 put("aid", 8662)
                 put("channel", value("channel", "69310258a"))
                 put("package", "com.phoenix.read")
-                put("app_version", "7.3.9.32")
-                put("version_code", 73932)
+                put("app_version", versionName)
+                put("version_code", versionCode)
                 put("sdk_version", "3.7.0-rc.34-fanqie-xiaoshuo")
                 put("sdk_target_version", 29)
                 put("git_hash", "3a88f4e")

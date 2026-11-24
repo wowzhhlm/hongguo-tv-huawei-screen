@@ -179,6 +179,9 @@ internal fun playbackJson(raw: String, stage: String): JSONObject {
 /** 连续前台空失败的恢复阈值；全路径已知为空时，还可在本轮剩余额度内提前恢复。 */
 private const val IDENTITY_ROTATE_ROUNDS = 2
 
+/** 韧性取址的设备轮换上限：本机画像 + 备用画像，有界防止无限注册。 */
+internal const val BACKUP_DEVICE_ROUNDS = 3
+
 class ContentRepository
 @JvmOverloads
 constructor(
@@ -880,6 +883,7 @@ constructor(
         transport: OkHttpClient = http,
         strict: Boolean = false,
         mobileV5: Boolean = false,
+        userAgent: String? = null,
     ): JSONObject? {
         val extra = mapOf(
             "video_id" to id, "video_id_type" to "0", "device_level" to "1",
@@ -889,7 +893,8 @@ constructor(
         )
         // One preferred request; the legacy path retains the bounded cross-host retry budget.
         for (host in listOf(PlayRetryPlan.hosts.first())) {
-            val request = if (mobileV5) MobilePlayback.videoTabRequest(id, identity.values, host, clock())
+            val request = if (mobileV5) MobilePlayback.videoTabRequest(id, identity.values, host, clock(),
+                userAgent = userAgent ?: identity.videoUa)
             else playbackRequest(
                 "https://$host/reading/bookapi/video_tab/multi_video_model/v1/",
                 identity, extra,
@@ -971,28 +976,69 @@ constructor(
 
     fun shouldDeferPlaybackPrefetch(): Boolean = playbackSession.shouldDeferPlaybackPrefetch(clock())
 
-    /** v5 model requests use the same anonymous registration across foreground and prefetch. */
+    /**
+     * v5 model requests use the same anonymous registration across foreground and prefetch.
+     *
+     * [tryDefaultEndpoint] 打开桌面端 v1.2.32 适配的「官方接口改验证方式」新端点：主
+     * `player/v1` 空响应后先试 `default/v1`。默认关闭以维持既有回归契约；韧性链路
+     * [streamLadderWithBackup] 会打开它。所有请求头 UA 都取自当前注册画像，避免拼接。
+     */
     fun streamLadderWithCompatibility(
         id: String,
         metadataAhead: List<String> = emptyList(),
         speculative: Boolean = false,
         onPrimaryEmpty: (() -> Unit)? = null,
+        tryDefaultEndpoint: Boolean = false,
+    ): StreamLadder = streamLadderWithCompatibility(
+        id, metadataAhead, speculative, onPrimaryEmpty, tryDefaultEndpoint, null,
+    )
+
+    /** internal 重载只服务韧性链路：显式传入本轮画像，避免并发轮换时混用两套身份。 */
+    internal fun streamLadderWithCompatibility(
+        id: String,
+        metadataAhead: List<String>,
+        speculative: Boolean,
+        onPrimaryEmpty: (() -> Unit)?,
+        tryDefaultEndpoint: Boolean,
+        profileOverride: PlaybackDeviceSession.Profile?,
     ): StreamLadder =
         RequestScope.withDeadline(System.nanoTime() + TimeUnit.SECONDS.toNanos(if (speculative) 2 else 8)) {
-            val profile = if (speculative) playbackSession.existing()
+            val profile = profileOverride ?: if (speculative) playbackSession.existing()
                 ?: throw IOException("播放设备尚未就绪") else playbackSession.profile(http)
             try {
-                MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock())
+                MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock(),
+                    userAgent = profile.playerUa)
                     .also { profile.recordPlayablePrimaryModel() }
             } catch (empty: EmptyPlaybackResponseException) {
                 profile.recordEmptyPrimaryModel(clock())
                 if (speculative) throw empty
                 RequestScope.ensureActive()
                 onPrimaryEmpty?.invoke()
+
+                // 官方接口改验证方式：主端点空后先试 default/v1（桌面端 v1.2.32 同款）。
+                // 只吞空响应与传输类异常；业务错误/限流仍由后续链路按既有规则处理。
+                if (tryDefaultEndpoint) {
+                    try {
+                        return@withDeadline MobilePlayback.defaultModelLadder(
+                            id, profile.values, http, MobilePlayback.signer, clock(),
+                            userAgent = profile.playerUa,
+                        ).also { profile.recordPlayablePrimaryModel() }
+                    } catch (defaultEmpty: EmptyPlaybackResponseException) {
+                        empty.addSuppressed(defaultEmpty)
+                    } catch (defaultProblem: IOException) {
+                        RequestScope.ensureActive()
+                        // 业务错误/限流是确定性结果，不能被降级成「空响应」掩盖。
+                        if (!PlayRetryPlan.temporary(defaultProblem)) throw defaultProblem
+                        empty.addSuppressed(defaultProblem)
+                    }
+                    RequestScope.ensureActive()
+                }
+
                 val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
                 val trace = PlaybackRequestTrace()
                 val entry = try {
-                    tabVideoModel(id, profile, trace, transport, strict = true, mobileV5 = true)
+                    tabVideoModel(id, profile, trace, transport, strict = true, mobileV5 = true,
+                        userAgent = profile.videoUa)
                 } catch (_: EmptyPlaybackResponseException) {
                     throw EmptyPlaybackResponseException(empty.detail, allPlaybackModelsEmpty = true).apply {
                         addSuppressed(empty)
@@ -1021,6 +1067,7 @@ constructor(
                 try {
                     MobilePlayback.ladder(
                         id, profile.values, http, MobilePlayback.signer, clock(), host = alternateHost,
+                        userAgent = profile.playerUa,
                     )
                 } catch (alternate: IOException) {
                     RequestScope.ensureActive()
@@ -1034,6 +1081,55 @@ constructor(
                 }
             }
         }
+
+    /**
+     * 前台韧性取址：对齐桌面端 v1.2.32「本机设备取不到播放地址时自动换用备用设备」。
+     *
+     * 每轮换一套自洽画像并重新匿名注册（[PlaybackDeviceSession.rotate]），用新设备重试
+     * default/v1 + 主链路。成功后 [rememberWorkingProfile] 固定该画像供下次冷启动优先复用。
+     * 后台预取 [speculative] 绝不注册/轮换，只尝试已就绪身份一次。
+     */
+    fun streamLadderWithBackup(
+        id: String,
+        metadataAhead: List<String> = emptyList(),
+        speculative: Boolean = false,
+        onPrimaryEmpty: (() -> Unit)? = null,
+    ): StreamLadder {
+        val rounds = if (speculative) 1 else BACKUP_DEVICE_ROUNDS
+        var lastFailure: IOException? = null
+        for (round in 0 until rounds) {
+            RequestScope.ensureActive()
+            if (round > 0) {
+                // 换备用设备：重新注册一套新身份。注册失败就停在当前轮，不消耗后续额度。
+                if (!playbackSession.rotate(http)) break
+                // 备用设备必须重新取址，不能复用旧设备留下的模型缓存。
+                synchronized(upcomingPlaybackModels) { upcomingPlaybackModels.clear() }
+            }
+            // 锁定本轮身份：后续 default/v1、video_tab、备用 host 都用它，成功后也记住它。
+            val roundProfile = playbackSession.existing()
+                ?: if (speculative) throw IOException("播放设备尚未就绪") else playbackSession.profile(http)
+            try {
+                val ladder = streamLadderWithCompatibility(
+                    id, metadataAhead, speculative,
+                    if (round == 0) onPrimaryEmpty else null,
+                    tryDefaultEndpoint = !speculative,
+                    profileOverride = roundProfile,
+                )
+                if (!speculative) playbackSession.rememberWorkingProfile(roundProfile)
+                return ladder
+            } catch (empty: EmptyPlaybackResponseException) {
+                lastFailure = empty
+                // 业务码/限流类失败换设备也无用，立刻上抛；纯空响应才值得轮换。
+                if (speculative || !empty.allPlaybackModelsEmpty) throw empty
+            } catch (problem: IOException) {
+                lastFailure = problem
+                // 只有临时故障（超时/连接/5xx）值得换设备重试；业务拒绝（码错误、4xx、
+                // 格式异常、无可用源）换设备也无用，立即上抛，避免无谓注册与等待。
+                if (speculative || !PlayRetryPlan.temporary(problem)) throw problem
+            }
+        }
+        throw lastFailure ?: EmptyPlaybackResponseException("stage=backup-devices-exhausted")
+    }
 
     /** Retained legacy transport for compatibility regression coverage. */
     internal fun legacyStreamLadderWithCompatibility(id: String, metadataAhead: List<String> = emptyList(), speculative: Boolean = false): StreamLadder {

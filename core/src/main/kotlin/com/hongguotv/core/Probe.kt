@@ -36,6 +36,64 @@ fun main(args: Array<String>) {
         }
         return
     }
+    if (args.contains("--registered-model")) {
+        // 2026-11-23：--signmatrix 只测过「带完整签名(含 x-helios/x-medusa)的详情页 POST」
+        // 与「无签名 GET video_tab」；GitHub 多方(aquanstudy 3.9 / sunnysky123 /
+        // miaoxiaohu 0.9.70 / zhenguojian)记录 2026-10-27 起的有效形态是
+        // 「已注册匿名设备 + 详情页批量 POST multi_video_model/v1(无 dr_scene、query 无 ts)
+        //   + 无签名或仅 4 头(x-gorgon/khronos/ladon/argus)签名」。本形态此前从未实测。
+        val session = PlaybackDeviceSession()
+        val repo = ContentRepository(playbackSession = session)
+        try {
+            val ids = args.filter { it.matches(Regex("[0-9]{1,30}")) }
+            val episodes =
+                if (ids.isNotEmpty()) ids else {
+                    listOfNotNull(
+                        repo.home().items.getOrNull(0)?.id?.let { repo.detail(it).episodes.firstOrNull() },
+                        repo.home().items.getOrNull(1)?.id?.let { repo.detail(it).episodes.firstOrNull() },
+                    )
+                }
+            check(episodes.isNotEmpty()) { "用法: --registered-model [episodeId...]" }
+            // 0) 注册身份诊断：GitHub 多方强调「device_register 成功」是能出模型的前提。
+            val profile = session.profile(repo.http)
+            println(
+                "registered-model identity; device_id=${profile.values["device_id"]?.take(4)}…; " +
+                    "iid=${profile.values["iid"]?.take(4)}…; cookieKeys=${profile.cookie.split(";").map { it.trim().substringBefore("=") }.filter { it.isNotBlank() }}",
+            )
+            val forms = listOf("unsigned", "unsigned_nocookie", "unsigned_newver", "unsigned_level3", "four_header", "full_signed", "unsigned_random")
+            for (host in PlayRetryPlan.hosts) {
+                for (form in forms) {
+                    Thread.sleep(350)
+                    println(
+                        "registered-model host=${PlayRetryPlan.tag(host)}; form=$form; episode=${episodes.first()}; " +
+                            registeredModelProbe(repo.http, session, host, form, episodes.first()),
+                    )
+                }
+            }
+            // 1) 项目自带 legacy 详情页批量链路（PHOENIX_URL，无 dr_scene，PlayerSigner 四头，
+            //    已注册设备）——与 GitHub 验证形态最接近，验证它当前能否直接出档位。
+            Thread.sleep(350)
+            val legacy =
+                try {
+                    val ladder = repo.legacyStreamLadderWithCompatibility(episodes.first())
+                    "renditions=${ladder.renditions.size}; codecs=${ladder.renditions.map { it.codec }.distinct()}"
+                } catch (problem: Exception) {
+                    "error=${problem.javaClass.simpleName}: ${problem.message?.take(80)}"
+                }
+            println("registered-model legacy_chain; episode=${episodes.first()}; $legacy")
+            // 2) 2026-11-23 桌面端 v1.2.32 对照结论（已用同时刻 PC 探针验证，不再重复发请求）：
+            //    桌面端 device.json = Xiaomi14/73932/xiaomi_8662_64/Android14 且带登录 Cookie；
+            //    TV 固定画像 = Redmi/71332/update_64/Android16。两者连同「桌面登录 Cookie +
+            //    device_token + 当天真实 video_id + default/v1/player/v1/详情批量」共 24 种组合，
+            //    在本机出口全部 HTTP 200 / 0B。即放行开关是「设备身份 + TLS 指纹 + 完整签名」，
+            //    不是单一端点或参数。故生产修复改为 BackupPlayback 的备用设备池 + 多端点 +
+            //    多签名模式（真机指纹不同才有命中机会），而非在此无限枚举形态。
+        } finally {
+            repo.http.connectionPool.evictAll(); repo.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     if (args.contains("--verify-tv-playback")) {
         var failures = 0
         var verified = 0
@@ -1095,6 +1153,95 @@ private fun signedProbe(
                 model?.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { entry ->
                     val meta = entry.optJSONObject("video_meta") ?: return@mapNotNull null
                     "${meta.optString("codec_type")}/${meta.optString("definition")}/${meta.optInt("vwidth")}x${meta.optInt("vheight")}"
+                }
+            "http=${response.code}; renditions=${renditions.joinToString(",")}; bytes=${body.length}"
+        }
+    } catch (problem: Exception) {
+        "error=${problem.javaClass.simpleName}: ${problem.message?.take(80)}"
+    }
+}
+
+/**
+ * --registered-model：GitHub 多方验证的「已注册匿名设备 + 详情页批量 POST」形态矩阵。
+ * 全部 query 不带 ts（zhenguojian 明确「多一个 ts= 时取流稳定回 200 空 body」）。
+ * body 不带 dr_scene（详情页场景；player/preload 场景被记录为稳定空包）。
+ * 输出仅含 HTTP 码、业务码与档位元数据，不含地址、密钥或身份。
+ */
+private fun registeredModelProbe(
+    http: OkHttpClient,
+    session: PlaybackDeviceSession,
+    host: String,
+    form: String,
+    episodeId: String,
+): String {
+    val identity = session.profile(http)
+    val now = System.currentTimeMillis()
+    val base = "https://$host/novel/player/multi_video_model/v1/"
+    val newerVersion =
+        mapOf(
+            "version_code" to "74332", "version_name" to "7.4.3.32",
+            "manifest_version_code" to "74332", "update_version_code" to "74332",
+            "pv_player" to "74332", "device_type" to "PGT-AN10", "os_version" to "12",
+            "channel" to "vivo_8662_64",
+        )
+    val values =
+        when (form) {
+            "unsigned_newver" -> identity.values + newerVersion
+            "unsigned_random" ->
+                VendorConstants.device + mapOf(
+                    "device_id" to "1905892595378490", "iid" to "1905892595382586",
+                    "cdid" to java.util.UUID.randomUUID().toString(),
+                )
+            else -> identity.values
+        }
+    // 详情页批量 body：无 dr_scene，direct video_model.video_list 优先。
+    val level = if (form == "unsigned_level3") 3 else 1
+    val payload =
+        """{"biz_param":{"detail_page_version":0,"device_level":$level,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$episodeId"]}}"""
+            .toByteArray()
+    // 无签名形态：只有设备字段 + _rticket，绝不带 ts、不带任何 x-gorgon/x-helios/x-medusa。
+    val plainQuery = Signer.encode(values + ("_rticket" to now.toString()))
+    val request =
+        okhttp3.Request.Builder()
+            .url("$base?$plainQuery")
+            .header("User-Agent", VendorConstants.PLAYER_UA)
+            .header("Accept", "application/json; charset=utf-8")
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .post(payload.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+    if (form != "unsigned_nocookie" && form != "unsigned_random" && identity.cookie.isNotBlank())
+        request.header("Cookie", identity.cookie)
+    if (form == "four_header" || form == "full_signed") {
+        // 精简签名：只带 x-gorgon/x-khronos/x-ladon/x-argus 四头（zhenguojian：
+        // 播放类多带 x-helios/x-medusa 会触发风控空包）。full_signed 为对照。
+        val signed = Signer(device = values).signPlayback(base, values, payload, now)
+        request.url(signed.url)
+        for ((k, v) in signed.headers) {
+            if (k !in setOf("x-khronos", "x-ladon", "x-argus", "x-gorgon", "x-helios", "x-medusa")) continue
+            if (form == "four_header" && k in setOf("x-helios", "x-medusa")) continue
+            request.header(k, v)
+        }
+    }
+    return try {
+        RequestScope.execute(http.newCall(request.build())) { response ->
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return@execute "http=${response.code}; body=EMPTY"
+            val json = runCatching { org.json.JSONObject(body) }.getOrNull()
+                ?: return@execute "http=${response.code}; body=NOT_JSON(${body.length})"
+            val code = json.optInt("code", json.optInt("Code", -1))
+            if (code != 0) return@execute "http=${response.code}; code=$code; msg=${json.optString("message").take(50)}"
+            val data = json.optJSONObject("data")
+            val row =
+                data?.optJSONObject(episodeId)
+                    ?: data?.keys()?.asSequence()?.mapNotNull { data.optJSONObject(it) }?.firstOrNull()
+                    ?: return@execute "http=${response.code}; code=$code; row=MISSING"
+            val model =
+                row.opt("video_model")?.let { value ->
+                    (value as? org.json.JSONObject) ?: runCatching { org.json.JSONObject(value.toString()) }.getOrNull()
+                }
+            val renditions =
+                model?.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { entry ->
+                    val meta = entry.optJSONObject("video_meta") ?: return@mapNotNull null
+                    "${meta.optString("codec_type")}/${meta.optString("definition")}"
                 }
             "http=${response.code}; renditions=${renditions.joinToString(",")}; bytes=${body.length}"
         }

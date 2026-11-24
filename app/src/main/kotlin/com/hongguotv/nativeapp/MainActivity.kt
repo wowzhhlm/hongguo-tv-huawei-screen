@@ -627,6 +627,17 @@ class MainActivity : Activity() {
         ContentRepository.deviceStore = PreferencesPlayerDeviceStore(
             getSharedPreferences("native-player-device", MODE_PRIVATE)
         )
+        // 备用播放画像的择优结果跨冷启动保留：上次能出播放地址的机型下次首发使用。
+        PlaybackDeviceProfiles.store = object : PlaybackProfileStore {
+            private val prefs = getSharedPreferences("native-playback-profile", MODE_PRIVATE)
+
+            override fun load(): String? = prefs.getString("working_tag", null)
+
+            override fun save(tag: String?) {
+                prefs.edit().putString("working_tag", tag).apply()
+            }
+        }
+        PlaybackDeviceProfiles.restoreFromStore()
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
@@ -3204,6 +3215,7 @@ class MainActivity : Activity() {
                             CodecCapabilities::supports,
                             recentPlaybackSources,
                             metadataAhead = data.episodes.drop(selectedIndex + 1).take(2),
+                            resilient = true,
                         ) {
                             it == null || CodecCapabilities.supports(it)
                         }
@@ -5009,17 +5021,6 @@ class MainActivity : Activity() {
         }
         if (screen == "catalog" && tab == 7 && tvSearchPanel != null && !nav[7].hasFocus()) {
             if (tvSearchPanel?.back() == true) return
-            nav[7].requestFocus()
-            return
-        }
-        if (screen == "catalog" && tab == 1 && !nav[1].hasFocus()) {
-            nav[1].requestFocus()
-            return
-        }
-        if (screen == "catalog" && tab == 2 && !nav[2].hasFocus()) {
-            rankingScreen?.backToTop()
-            nav[2].requestFocus()
-            return
         }
         when (screen) {
             "player" ->
@@ -5041,12 +5042,17 @@ class MainActivity : Activity() {
                     showDetail(false)
                 }
             }
-            else ->
-                if (tab == 7 && query.isNotBlank()) clearSearch()
-                else if (collection != null) {
+            // 主导航、推荐页画面、搜索面板已在前面处理；其余任意 tab 的内容区按返回
+            // 都直接弹退出确认，与推荐页一致。此前只有推荐页能一步弹出，其他页要先把
+            // 焦点移回左侧导航再按一次，用户感知为「退出菜单只有在推荐页才弹」。
+            else -> when {
+                tab == 7 && query.isNotBlank() -> clearSearch()
+                collection != null -> {
                     leaveCollection()
                     showCatalog()
-                } else nav.getOrNull(tab)?.requestFocus()
+                }
+                else -> tvTools.confirm("退出hongguoTV", "确定退出？", currentFocus) { finish() }
+            }
         }
     }
 

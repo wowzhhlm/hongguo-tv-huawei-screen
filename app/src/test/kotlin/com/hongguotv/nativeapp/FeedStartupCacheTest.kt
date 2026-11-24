@@ -370,8 +370,10 @@ class FeedStartupCacheTest {
                     assertThrows(EmptyPlaybackResponseException::class.java) { backend.trial(series) }
                 }
                 assertEquals(1, paths.count { it == "/detail" })
-                assertEquals(3, paths.count { it == "/novel/player/multi_video_model/player/v1" })
-                assertEquals(3, paths.count { it.contains("/video_tab/") })
+                // 前台试播启用韧性取址：每次失败轮换 BACKUP_DEVICE_ROUNDS 套设备，
+                // 所以 3 次试播是 3×3 个主端点请求；detail 仍只请求 1 次（缓存复用）。
+                assertEquals(9, paths.count { it == "/novel/player/multi_video_model/player/v1" })
+                assertEquals(9, paths.count { it.contains("/video_tab/") })
 
                 org.robolectric.shadows.ShadowLooper.idleMainLooper(20, java.util.concurrent.TimeUnit.SECONDS)
                 assertThrows(EmptyPlaybackResponseException::class.java) { backend.trial(series) }

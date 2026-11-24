@@ -232,6 +232,7 @@ internal class PublicFeedBackend(
             recentSources,
             initialBytes = 32 * 1024,
             speculative = speculative,
+            resilient = !speculative,
         ) {
             it == null || CodecCapabilities.supports(it)
         } ?: throw java.io.IOException("该作品暂时没有可试播的剧集")

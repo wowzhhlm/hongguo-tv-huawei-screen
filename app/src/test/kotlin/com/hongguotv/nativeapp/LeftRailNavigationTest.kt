@@ -201,11 +201,11 @@ class LeftRailNavigationTest {
             field(activity, "tab").setInt(activity, 0)
             content.requestFocus()
             back()
-            assertTrue("Home content returns to primary navigation first", shell.navigation[0].hasFocus())
-            assertFalse(dialog.isShowing)
-            back()
-            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
-                .getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+            // 任意 tab 内容区按返回都直接弹退出确认，与推荐页一致（不再先回导航）。
+            val contentDialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+            assertTrue("Home content confirms exit directly", contentDialog.isShowing)
+            assertFalse(activity.isFinishing)
+            contentDialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
             ShadowLooper.idleMainLooper()
             assertTrue(activity.isFinishing)
         } finally { controller.destroy() }

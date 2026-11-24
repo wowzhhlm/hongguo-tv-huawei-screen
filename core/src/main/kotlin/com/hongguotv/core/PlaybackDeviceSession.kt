@@ -16,9 +16,11 @@ class PlaybackDeviceRegistrationException(cause: Throwable? = null) :
 /** Anonymous playback identity. Register once, then keep the same identity across repositories. */
 class PlaybackDeviceSession(
     private val register: (OkHttpClient) -> DeviceRegister.Registered? = { http ->
-        val body = DeviceRegister.payload(VendorConstants.device)
+        // 注册 payload / UA / 版本必须与后续播放请求取自同一套画像，避免混合出矛盾设备。
+        val device = PlaybackDeviceProfiles.current().values()
+        val body = DeviceRegister.payload(device)
         val request = Request.Builder().url(DeviceRegister.url())
-        DeviceRegister.headers(body, VendorConstants.device).forEach { (key, value) ->
+        DeviceRegister.headers(body, device).forEach { (key, value) ->
             request.header(key, value)
         }
         request.post(body.toRequestBody("application/octet-stream".toMediaType()))
@@ -30,17 +32,25 @@ class PlaybackDeviceSession(
             }
             DeviceRegister.parse(text, response.headers("Set-Cookie"))
         }
-    }
+    },
 ) {
     companion object {
         val shared = PlaybackDeviceSession()
         private const val EMPTY_MODEL_PREFETCH_PAUSE_MILLIS = 5_000L
     }
 
+    /** 画像来源；单测可替换固定画像，避免断言随全局择优状态漂移。 */
+    internal var profileSource: () -> PlaybackProfile = { PlaybackDeviceProfiles.current() }
+
     internal data class Profile(
         val values: Map<String, String>,
         val cookie: String,
         val routes: PlaybackRoutes = PlaybackRoutes(),
+        /** 该身份所用的画像标签，播放成功后据此固定可用设备。 */
+        val profileTag: String = "",
+        /** 与注册画像一致的 UA；播放请求头必须用它们，否则版本/机型自相矛盾。 */
+        val videoUa: String = VendorConstants.VIDEO_UA,
+        val playerUa: String = VendorConstants.PLAYER_UA,
     ) {
         private var playbackSigner: Signer? = null
         private var recommendationSigner: Signer? = null
@@ -116,19 +126,38 @@ class PlaybackDeviceSession(
         if (Thread.currentThread().isInterrupted) return false
         // 共享会话的其他仓库实例已替换该失败身份，直接复用。
         if (expected != null && ready !== expected && ready != null) return true
+        // 桌面端 v1.2.32：本机设备取不到播放地址时换用下一套备用设备画像（PickCustomIID）。
+        // 必须在注册前轮换，让注册 payload 与后续的 toProfile 取自同一套画像，避免自相矛盾。
+        val previousIndex = PlaybackDeviceProfiles.currentIndex()
+        PlaybackDeviceProfiles.advance()
+        // 注册失败不能消耗一套备用画像：回退尝试游标，下次仍可从这套设备重试。
+        fun failed(): Boolean {
+            PlaybackDeviceProfiles.rewind(previousIndex)
+            return false
+        }
         val device =
             try {
-                register(http) ?: return false
+                register(http)
             } catch (error: InterruptedIOException) {
                 // 网络超时也可能使用此异常类型，不能据此把正常工作线程标为已取消。
-                return false
+                null
             } catch (error: IOException) {
-                return false
-            }
-        if (!validDevice(device)) return false
+                null
+            } ?: return failed()
+        if (!validDevice(device)) return failed()
         cdid = UUID.randomUUID().toString()
         ready = toProfile(device)
         return true
+    }
+
+    /**
+     * 播放取址成功后固定**这次实际使用**的画像（对应桌面端 playback_device.json）。
+     * 不能读全局游标：并发轮换时它可能已被其他线程推进，导致记住错误的设备。
+     */
+    @Synchronized
+    internal fun rememberWorkingProfile(profile: Profile) {
+        val index = PlaybackDeviceProfiles.all.indexOfFirst { it.tag == profile.profileTag }
+        if (index >= 0) PlaybackDeviceProfiles.rememberWorking(index)
     }
 
     private fun registerDevice(http: OkHttpClient): DeviceRegister.Registered {
@@ -148,9 +177,12 @@ class PlaybackDeviceSession(
     private fun validDevice(device: DeviceRegister.Registered) =
         validId.matches(device.deviceId) && validId.matches(device.installId)
 
-    private fun toProfile(device: DeviceRegister.Registered): Profile =
-        Profile(
-            VendorConstants.device +
+    private fun toProfile(device: DeviceRegister.Registered): Profile {
+        // 注册 payload、播放 query、UA 与 medusa 必须来自同一套自洽画像。
+        // 旧实现固定用 VendorConstants.device，而注册已改用画像池，导致身份自相矛盾。
+        val source = profileSource()
+        return Profile(
+            source.values() +
                 mapOf(
                     "device_id" to device.deviceId,
                     "iid" to device.installId,
@@ -162,7 +194,11 @@ class PlaybackDeviceSession(
                 }
                 .entries
                 .joinToString("; ") { (name, value) -> "$name=$value" },
+            profileTag = source.tag,
+            videoUa = source.videoUa,
+            playerUa = source.playerUa,
         )
+    }
 }
 
 private val validId = Regex("[1-9][0-9]{0,29}")

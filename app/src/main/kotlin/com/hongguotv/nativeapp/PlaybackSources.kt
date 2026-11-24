@@ -247,6 +247,8 @@ internal fun openStream(
     initialBytes: Int = 256 * 1024,
     metadataAhead: List<String> = emptyList(),
     speculative: Boolean = false,
+    /** 前台韧性取址：本机设备取不到时换备用设备 + 官方新验证端点；测试默认关闭保持契约。 */
+    resilient: Boolean = false,
     supportsTrack: (VideoTracks.Track?) -> Boolean,
 ): OpenedStream? {
     fun prepare(ladder: StreamLadder): OpenedStream? {
@@ -278,7 +280,13 @@ internal fun openStream(
     var validation: RecentSourceValidation? = null
     val prepareDeadline = RequestScope.deadlineAtMost(Long.MAX_VALUE)
     val ladder = try {
-        repository.streamLadderWithCompatibility(id, metadataAhead, speculative) {
+        // 前台生产调用传入 resilient=true：本机设备取不到时自动换备用设备 + 官方新验证端点
+        // default/v1；后台预取与测试默认关闭，保持既有链路与缓存兜底契约。
+        val fetchLadder = { onPrimaryEmpty: () -> Unit ->
+            if (resilient) repository.streamLadderWithBackup(id, metadataAhead, speculative, onPrimaryEmpty)
+            else repository.streamLadderWithCompatibility(id, metadataAhead, speculative, onPrimaryEmpty)
+        }
+        fetchLadder {
             val cached = recentSources.find(id, maxQuality)
             if (cached != null) {
                 val deadline = minOf(prepareDeadline, System.nanoTime() + TimeUnit.SECONDS.toNanos(2))
