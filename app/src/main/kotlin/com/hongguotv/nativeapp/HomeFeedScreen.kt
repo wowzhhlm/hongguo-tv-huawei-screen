@@ -273,6 +273,34 @@ internal class HomeFeedScreen(
             else -> value.toString()
         }
 
+    /** 桌面版推荐页顶部分类栏：覆盖在画面上的胶囊标签，而非独立占一行的按钮。 */
+    private fun tabButton(value: String, action: () -> Unit) =
+        label(value, 15f).apply {
+            id = View.generateViewId()
+            tag = "feed:tab"
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isClickable = true
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setOnFocusChangeListener { _, _ -> paintTab(this) }
+            setOnClickListener { action() }
+        }
+
+    private fun paintTab(tab: TextView) {
+        val selected = tab.isSelected
+        tab.background =
+            TvStyle.shape(
+                activity,
+                if (selected || tab.hasFocus()) Color.argb(190, 8, 11, 16) else Color.argb(105, 8, 11, 16),
+                radius = 18,
+            )
+        tab.setTextColor(if (selected) Color.WHITE else TvStyle.muted)
+        tab.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+    }
+
     private fun button(value: String, action: () -> Unit) =
         label(value, 14f).apply {
             id = View.generateViewId()
@@ -401,13 +429,14 @@ internal class HomeFeedScreen(
         openEpisodes(series)
     }
 
-    // 组装首页布局和点击事件；分类栏、内容区、操作栏按纵向排列。
+    // 组装首页：对齐桌面版 recommend.png 的覆盖式推荐页。
+    // 左侧导航由 CatalogShell 提供；本组件只负责全屏视频舞台与画面覆盖层。
     init {
         orientation = VERTICAL
         stage.id = View.generateViewId()
-        val types = LinearLayout(activity)
+        val types = LinearLayout(activity).apply { gravity = Gravity.CENTER }
         recommendButton =
-            button("推荐") {
+            tabButton("推荐") {
                 if (!state.recommendation) {
                     clearCurrent()
                     clearCache()
@@ -417,10 +446,10 @@ internal class HomeFeedScreen(
                     if (state.current != null) loadCurrent() else loadPage(false)
                 }
             }
-        comicButton = button("漫剧") { changeType(DramaCategory.COMIC) }
-        realButton = button("真人剧") { changeType(DramaCategory.REAL) }
+        comicButton = tabButton("漫剧") { changeType(DramaCategory.COMIC) }
+        realButton = tabButton("真人剧") { changeType(DramaCategory.REAL) }
         val refresh =
-            button("换一批") {
+            tabButton("换一批") {
                 clearCurrent()
                 clearCache()
                 val restart = exhaustedCursors.remove(state.recommendationCursor)
@@ -431,42 +460,39 @@ internal class HomeFeedScreen(
             }
         val typeChoices = listOf(recommendButton, comicButton, realButton, refresh)
         typeChoices.forEachIndexed { i, b ->
-            types.addView(
-                b,
-                lp(0, dp(40)).apply {
-                    weight = 1f
-                    rightMargin = dp(8)
-                },
-            )
+            types.addView(b, lp(-2, dp(38)).apply { if (i > 0) leftMargin = dp(10) })
             b.nextFocusUpId = b.id
             b.nextFocusDownId = stage.id
             b.nextFocusLeftId = typeChoices.getOrNull(i - 1)?.id ?: b.id
             b.nextFocusRightId = typeChoices.getOrNull(i + 1)?.id ?: b.id
         }
-        addView(types, lp(-1, dp(48)))
-        val carousel = FrameLayout(activity).apply { clipChildren = false; clipToPadding = false }
-        hero.background = TvVisual.panel(activity)
-        hero.clipToOutline = true
-        hero.elevation = 0f
-        hero.setPadding(dp(2), dp(2), dp(2), dp(2))
-        val body = LinearLayout(activity).apply { orientation = VERTICAL; setPadding(dp(8), dp(4), dp(8), dp(4)) }
-        hero.addView(body, FrameLayout.LayoutParams(-1, -1))
-        tag.setPadding(0, dp(5), 0, dp(8))
-        tag.background = null
 
-        val content = LinearLayout(activity).apply { setPadding(0, 0, 0, 0) }
+        val carousel = FrameLayout(activity).apply { clipChildren = false; clipToPadding = false }
+        hero.background = null
+        hero.clipToOutline = false
+        hero.elevation = 0f
+        val body = FrameLayout(activity)
+        hero.addView(body, FrameLayout.LayoutParams(-1, -1))
+        tag.setPadding(0, dp(4), 0, dp(4))
+
         stage.isFocusable = true
         stage.isFocusableInTouchMode = true
         stage.isClickable = true
         stage.contentDescription = "左右换剧，确定暂停或继续，下键进入操作"
-        stage.background = TvStyle.shape(activity, Color.BLACK, radius = 7)
-        stage.clipToOutline = true
+        stage.setBackgroundColor(Color.BLACK)
         stage.addView(playback.view, FrameLayout.LayoutParams(-1, -1))
         stage.addView(poster, FrameLayout.LayoutParams(-1, -1))
+        // 分类栏与集数角标覆盖在画面顶部。
+        stage.addView(
+            types,
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = dp(16)
+            },
+        )
         stage.addView(
             episodeBadge,
             FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
-                topMargin = dp(10); rightMargin = dp(12)
+                topMargin = dp(18); rightMargin = dp(20)
             },
         )
         // 右侧互动栏：仅展示真实可得的评论数与收藏状态，纯展示不占焦点。
@@ -492,33 +518,46 @@ internal class HomeFeedScreen(
         )
         currentSpeed = PlaybackSpeed.normalize(initialSpeed)
         currentQuality = PlaybackQuality.normalize(initialQuality)
+
+        // 作品信息覆盖在画面左下，取代原来的右侧独立信息栏。
+        tag.setTextColor(TvVisual.accent)
+        tag.textSize = 12f
         info.addView(tag)
-        status.gravity = Gravity.CENTER
-        status.textSize = 12f
-        status.setPadding(dp(8), dp(6), dp(8), dp(6))
-        status.background = TvStyle.shape(activity, Color.argb(215, 11, 15, 21))
-        content.addView(stage, lp(0, -1).apply { weight = 1f })
         title.typeface = Typeface.DEFAULT_BOLD
-        title.textSize = 22f
-        title.maxLines = 2
+        title.textSize = 21f
+        title.maxLines = 1
         title.ellipsize = TextUtils.TruncateAt.END
         info.addView(title)
         meta.maxLines = 1
         meta.ellipsize = TextUtils.TruncateAt.END
-        meta.setPadding(0, dp(4), 0, dp(4))
+        meta.setTextColor(TvVisual.accent)
+        meta.setPadding(0, dp(3), 0, dp(3))
         info.addView(meta)
         intro.maxLines = 2
-        intro.textSize = 14f
+        intro.textSize = 13f
         intro.ellipsize = TextUtils.TruncateAt.END
         info.addView(intro)
-        info.setPadding(dp(12), dp(10), dp(12), dp(10))
-        info.setBackgroundColor(TvStyle.surface)
+        positionLabel.gravity = Gravity.START
+        positionLabel.textSize = 11f
+        positionLabel.setTextColor(TvStyle.muted)
+        info.addView(positionLabel)
+        status.gravity = Gravity.START
+        status.textSize = 12f
+        status.setPadding(dp(8), dp(5), dp(8), dp(5))
+        status.background = TvStyle.shape(activity, Color.argb(215, 11, 15, 21))
         info.addView(status)
-        content.addView(info, lp(dp(220), -1))
-        body.addView(content, lp(-1, 0).apply { weight = 1f })
-        carousel.addView(hero, FrameLayout.LayoutParams(-1, -1).apply {
-            setMargins(0, dp(8), 0, dp(8))
-        })
+        info.isFocusable = false
+        info.setPadding(dp(14), dp(12), dp(14), dp(12))
+        info.background = TvStyle.shape(activity, Color.argb(150, 8, 11, 16), radius = 12)
+        stage.addView(
+            info,
+            FrameLayout.LayoutParams(dp(470), -2, Gravity.BOTTOM or Gravity.START).apply {
+                leftMargin = dp(22); bottomMargin = dp(96)
+            },
+        )
+
+        body.addView(stage, FrameLayout.LayoutParams(-1, -1))
+        carousel.addView(hero, FrameLayout.LayoutParams(-1, -1))
         addView(carousel, lp(-1, 0).apply { weight = 1f })
         watchButton =
             button("播放全集") { openCurrent() }
@@ -555,14 +594,16 @@ internal class HomeFeedScreen(
             b.nextFocusUpId = stage.id
             b.nextFocusDownId = b.id
         }
-        actions.setPadding(0, dp(10), 0, 0)
-        body.addView(actions)
-        positionLabel.gravity = Gravity.CENTER
-        positionLabel.setPadding(0, 0, 0, 0)
-        addView(positionLabel, lp(-1, dp(24)))
-        addView(label("← →  换剧     OK  暂停 / 继续     菜单  播放控制     ↓  操作     ↑  分类", 12f, TvStyle.muted).apply {
-            gravity = Gravity.CENTER
-        }, lp(-1, dp(24)))
+        // 操作栏覆盖在画面底部、默认隐藏；下键唤出，返回键退回画面并收起。
+        actions.visibility = View.GONE
+        actions.setPadding(dp(12), dp(10), dp(12), dp(10))
+        actions.background = TvStyle.shape(activity, Color.argb(210, 8, 11, 16), radius = 12)
+        stage.addView(
+            actions,
+            FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+                bottomMargin = dp(96); leftMargin = dp(22); rightMargin = dp(22)
+            },
+        )
         stage.nextFocusLeftId = stage.id
         stage.nextFocusRightId = stage.id
         stage.nextFocusUpId = recommendButton.id
@@ -572,9 +613,6 @@ internal class HomeFeedScreen(
                 (if (state.recommendation) recommendButton
                     else if (state.category == DramaCategory.COMIC) comicButton else realButton)
                     .id
-        }
-        stage.setOnFocusChangeListener { _, focused ->
-            hero.background = TvStyle.card(activity, focused)
         }
         stage.setOnClickListener { toggle() }
         hero.setOnClickListener { toggle() }
@@ -762,6 +800,10 @@ internal class HomeFeedScreen(
 
     fun back(): Boolean {
         if (!actions.hasFocus()) return false
+        actions.visibility = View.GONE
+        info.visibility = View.VISIBLE
+        // 与 close() 保持一致：info 恢复可见时同步恢复标签，否则「推荐 · 随心看」会残留隐藏。
+        tag.visibility = info.visibility
         stage.requestFocus()
         return true
     }
@@ -785,10 +827,11 @@ internal class HomeFeedScreen(
         state.current?.let { remember(force = true); pause(); watch(it) }
     }
 
-    // 下键将焦点移到主卡底部操作栏。
+    // 下键将焦点移到覆盖式操作栏；操作栏显示时收起作品信息，避免遮挡。
     private fun showActions() {
         actions.visibility = View.VISIBLE
         paintActions()
+        info.visibility = View.GONE
         (if (watchButton.isEnabled) watchButton else stage).requestFocus()
     }
 
@@ -818,10 +861,11 @@ internal class HomeFeedScreen(
         recommendButton.isSelected = state.recommendation
         comicButton.isSelected = !state.recommendation && state.category == DramaCategory.COMIC
         realButton.isSelected = !state.recommendation && state.category == DramaCategory.REAL
-        paintButton(recommendButton)
-        paintButton(comicButton)
-        paintButton(realButton)
-        info.visibility = View.VISIBLE
+        paintTab(recommendButton)
+        paintTab(comicButton)
+        paintTab(realButton)
+        // 覆盖式布局下作品信息与操作栏互斥，避免两处覆盖层相互遮挡。
+        info.visibility = if (actions.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         tag.visibility = info.visibility
         stage.keepScreenOn = active && clip != null && !state.userPaused && !state.ended && !failed
     }

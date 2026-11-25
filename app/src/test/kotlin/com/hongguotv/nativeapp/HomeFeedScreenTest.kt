@@ -312,7 +312,8 @@ class HomeFeedScreenTest {
             val stage = get(screen, "stage") as View
             stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
             assertEquals("1", state.current?.id)
-            assertSame(stage.parent, (get(screen, "info") as View).parent)
+            // 覆盖式推荐页：作品信息直接叠加在视频舞台上，而非与舞台并列。
+            assertSame(stage, (get(screen, "info") as View).parent)
             assertTrue(texts(screen).first { it.text == "播放全集" }.hasFocus())
             assertTrue(screen.back())
             assertTrue(stage.hasFocus())
