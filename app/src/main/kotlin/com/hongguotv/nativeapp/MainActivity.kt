@@ -638,6 +638,10 @@ class MainActivity : Activity() {
             }
         }
         PlaybackDeviceProfiles.restoreFromStore()
+        // v0.23.0：导入桌面端已养熟的设备身份，跳过匿名注册。诊断显示新注册设备
+        // 取播放模型一律 200/0B，而桌面端长期复用的这份身份仍可出播放地址。
+        // 共享会话在字段初始化时就被 repository 引用，必须在任何取址前安装。
+        DesktopDeviceIdentity.install()
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or

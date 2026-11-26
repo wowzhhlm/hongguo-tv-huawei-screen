@@ -32,8 +32,8 @@ android {
         // 兼容项：HarmonyOS 4.3 的 Android 兼容层约为 Android 12（API 31）。
         // targetSdk 36 会触发新一代系统行为约束，兼容层未必完整支持；降到 30 更稳。
         targetSdk = 30
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 41
-        versionName = (System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.22.0") + "-huawei-screen"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 42
+        versionName = (System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.23.0") + "-huawei-screen"
     }
     // 兼容项：移除 ABI 分包，只产出一个 universal APK。
     // 分 ABI 包一旦下错架构（智慧屏多为 arm64-v8a）就会报"解析失败/应用未安装"。

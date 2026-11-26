@@ -894,7 +894,8 @@ constructor(
         // One preferred request; the legacy path retains the bounded cross-host retry budget.
         for (host in listOf(PlayRetryPlan.hosts.first())) {
             val request = if (mobileV5) MobilePlayback.videoTabRequest(id, identity.values, host, clock(),
-                userAgent = userAgent ?: identity.videoUa)
+                userAgent = userAgent ?: identity.videoUa,
+                cookie = identity.cookie, deviceToken = identity.deviceToken)
             else playbackRequest(
                 "https://$host/reading/bookapi/video_tab/multi_video_model/v1/",
                 identity, extra,
@@ -1007,7 +1008,8 @@ constructor(
                 ?: throw IOException("播放设备尚未就绪") else playbackSession.profile(http)
             try {
                 MobilePlayback.ladder(id, profile.values, http, MobilePlayback.signer, clock(),
-                    userAgent = profile.playerUa)
+                    userAgent = profile.playerUa,
+                    cookie = profile.cookie, deviceToken = profile.deviceToken)
                     .also { profile.recordPlayablePrimaryModel() }
             } catch (empty: EmptyPlaybackResponseException) {
                 profile.recordEmptyPrimaryModel(clock())
@@ -1022,6 +1024,7 @@ constructor(
                         return@withDeadline MobilePlayback.defaultModelLadder(
                             id, profile.values, http, MobilePlayback.signer, clock(),
                             userAgent = profile.playerUa,
+                            cookie = profile.cookie, deviceToken = profile.deviceToken,
                         ).also { profile.recordPlayablePrimaryModel() }
                     } catch (defaultEmpty: EmptyPlaybackResponseException) {
                         empty.addSuppressed(defaultEmpty)
@@ -1068,6 +1071,7 @@ constructor(
                     MobilePlayback.ladder(
                         id, profile.values, http, MobilePlayback.signer, clock(), host = alternateHost,
                         userAgent = profile.playerUa,
+                        cookie = profile.cookie, deviceToken = profile.deviceToken,
                     )
                 } catch (alternate: IOException) {
                     RequestScope.ensureActive()

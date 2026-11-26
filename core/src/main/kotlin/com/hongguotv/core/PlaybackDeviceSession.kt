@@ -51,6 +51,8 @@ class PlaybackDeviceSession(
         /** 与注册画像一致的 UA；播放请求头必须用它们，否则版本/机型自相矛盾。 */
         val videoUa: String = VendorConstants.VIDEO_UA,
         val playerUa: String = VendorConstants.PLAYER_UA,
+        /** 桌面端导入身份的 device_token；请求头需要回传。 */
+        val deviceToken: String = "",
     ) {
         private var playbackSigner: Signer? = null
         private var recommendationSigner: Signer? = null
@@ -97,6 +99,41 @@ class PlaybackDeviceSession(
 
     private var cdid = UUID.randomUUID().toString()
     @Volatile private var ready: Profile? = null
+    /** 已安装桌面端导入身份时固定它：不再匿名注册，也不参与备用设备轮换。 */
+    @Volatile private var imported: Boolean = false
+
+    /**
+     * 安装桌面端已养熟的固定身份，跳过匿名注册。
+     * 画像必须与身份历史一致（device.json 是 Xiaomi 14 / 73932 / xiaomi_8662_64），
+     * 否则 query、UA、签名三处会写出互相矛盾的设备。
+     */
+    @Synchronized
+    fun installImportedIdentity(identity: ImportedDeviceIdentity) {
+        val source = PlaybackDeviceProfiles.all.firstOrNull { it.tag == identity.profileTag }
+            ?: PlaybackDeviceProfiles.current()
+        val cookie = buildList {
+            add("install_id=${identity.installId}")
+            if (identity.ttreq.isNotBlank()) add("ttreq=${identity.ttreq}")
+            if (identity.storeRegion.isNotBlank()) add("store-region=${identity.storeRegion}")
+            add("store-region-src=did")
+        }.joinToString("; ")
+        val values = buildMap {
+            putAll(source.values())
+            put("device_id", identity.deviceId)
+            put("iid", identity.installId)
+            put("cdid", identity.cdid)
+            if (identity.openudid.isNotBlank()) put("openudid", identity.openudid)
+        }
+        ready = Profile(
+            values = values,
+            cookie = cookie,
+            profileTag = source.tag,
+            videoUa = source.videoUa,
+            playerUa = source.playerUa,
+            deviceToken = identity.deviceToken,
+        )
+        imported = true
+    }
 
     @Synchronized
     internal fun profile(http: OkHttpClient): Profile {
@@ -124,6 +161,8 @@ class PlaybackDeviceSession(
     @Synchronized
     internal fun rotate(http: OkHttpClient, expected: Profile? = null): Boolean {
         if (Thread.currentThread().isInterrupted) return false
+        // 固定身份是为验证服务端放行而导入的养熟设备；轮换会丢掉它，故禁用。
+        if (imported) return false
         // 共享会话的其他仓库实例已替换该失败身份，直接复用。
         if (expected != null && ready !== expected && ready != null) return true
         // 桌面端 v1.2.32：本机设备取不到播放地址时换用下一套备用设备画像（PickCustomIID）。

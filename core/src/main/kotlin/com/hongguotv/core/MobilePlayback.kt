@@ -54,7 +54,9 @@ internal object MobilePlayback {
      */
     fun videoTabRequest(id: String, device: Map<String, String>, host: String, now: Long,
                         signing: MobilePlaybackSigner = signer,
-                        userAgent: String? = null): Request.Builder {
+                        userAgent: String? = null,
+                        cookie: String? = null,
+                        deviceToken: String? = null): Request.Builder {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
         val values = query(device) + linkedMapOf(
@@ -78,6 +80,12 @@ internal object MobilePlayback {
                 removeHeader("Content-Encoding")
                 // User-Agent 不参与签名；强制对齐注册画像的 UA。
                 if (userAgent != null) header("User-Agent", userAgent!!)
+                // 注册身份下发的 Cookie 与 UA 一样不参与签名，可安全补齐。
+                // 历史实现只发签名头，缺 Cookie 会被上游判为不完整官方形态而静默 200/0B。
+                if (!cookie.isNullOrBlank()) header("Cookie", cookie)
+                // device_token 头名未在桌面端二进制证实（那里只有 json:"device_token" 字段，
+                // 真实鉴权头是 x-tt-token / auth:mf）；未知头上游会忽略，仅作保险发送。
+                if (!deviceToken.isNullOrBlank()) header("device_token", deviceToken)
             }
     }
 
@@ -96,8 +104,10 @@ internal object MobilePlayback {
         now: Long,
         host: String = PRIMARY_MODEL_HOST,
         userAgent: String? = null,
+        cookie: String? = null,
+        deviceToken: String? = null,
     ): StreamLadder = modelLadder(id, device, http, signing, now, host,
-        "/novel/player/multi_video_model/default/v1", userAgent)
+        "/novel/player/multi_video_model/default/v1", userAgent, cookie, deviceToken)
 
     private fun modelLadder(
         id: String,
@@ -108,6 +118,8 @@ internal object MobilePlayback {
         host: String,
         path: String,
         userAgent: String?,
+        cookie: String? = null,
+        deviceToken: String? = null,
     ): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
@@ -127,6 +139,8 @@ internal object MobilePlayback {
         signed.headers.forEach { (k, v) -> request.header(k, v) }
         // User-Agent 不参与签名计算；覆盖为注册画像的 UA 保持与 query/注册身份自洽。
         if (userAgent != null) request.header("User-Agent", userAgent)
+        if (!cookie.isNullOrBlank()) request.header("Cookie", cookie)
+        if (!deviceToken.isNullOrBlank()) request.header("device_token", deviceToken)
         RequestScope.ensureActive()
         request.post(bytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
@@ -169,6 +183,8 @@ internal object MobilePlayback {
         now: Long,
         host: String = PRIMARY_MODEL_HOST,
         userAgent: String? = null,
+        cookie: String? = null,
+        deviceToken: String? = null,
     ): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
@@ -190,6 +206,8 @@ internal object MobilePlayback {
         signed.headers.forEach { (k,v) -> request.header(k,v) }
         // User-Agent 不参与签名计算；签名器给的是占位机型，覆盖为注册画像的 UA 保持自洽。
         if (userAgent != null) request.header("User-Agent", userAgent)
+        if (!cookie.isNullOrBlank()) request.header("Cookie", cookie)
+        if (!deviceToken.isNullOrBlank()) request.header("device_token", deviceToken)
         RequestScope.ensureActive()
         request.post(bytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
